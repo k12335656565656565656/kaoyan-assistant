@@ -1,0 +1,22 @@
+# 用户数据
+data/memory.db
+data/user_materials/
+agent_experience_*.md
+
+# 构建产物
+KaoyanRAG-v*.zip
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# 敏感文件
+.env
+
+# 日志
+*.log
+
+# 临时文件
+copy_to_git.py
