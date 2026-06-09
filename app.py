@@ -4,6 +4,8 @@
 """
 import streamlit as st
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import json
 import sqlite3
 import math
