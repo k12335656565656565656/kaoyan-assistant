@@ -1680,7 +1680,10 @@ def _fix_latex(text):
         if "$" in s:
             return s
         return f"${s}$"
-    text = re.sub(r'(?<!\$)(\\(?:lim|frac|sqrt|int|sum|prod|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|sigma|omega|pi|rho|tau|phi|psi|chi|infty|partial|nabla|forall|exists|in|notin|subset|supset|cup|cap|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|sim|propto|rightarrow|leftarrow|leftrightarrow|Rightarrow|Leftarrow|leftrightarrow|vec|hat|bar|dot|ddot|overline|underline|overbrace|underbrace|left\(|right\)|Big|big|left\[|right\])\b[^\n$]*', _wrap_bare_latex, text)
+    try:
+        text = re.sub(r'(?<!\$)(\\(?:lim|frac|sqrt|int|sum|prod|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|sigma|omega|pi|rho|tau|phi|psi|chi|infty|partial|nabla|forall|exists|in|notin|subset|supset|cup|cap|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|sim|propto|rightarrow|leftarrow|leftrightarrow|Rightarrow|Leftarrow|leftrightarrow|vec|hat|bar|dot|ddot|overline|underline|overbrace|underbrace|left\(|right\)|Big|big|left\[|right\])\b[^\n$]*', _wrap_bare_latex, text)
+    except:
+        pass
     return text
 
 def _collapse_math(text):
