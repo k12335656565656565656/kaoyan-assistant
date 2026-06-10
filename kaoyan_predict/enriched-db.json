@@ -346,5 +346,179 @@
       "modelVersion": "1.0",
       "timestamp": "2026-05-26T19:01:42.545Z"
     }
+  },
+  {
+    "school": "江西理工大学",
+    "schoolLevel": "双非",
+    "major": "软件工程",
+    "majorCode": "083500",
+    "department": "相关学院",
+    "degreeType": "academic",
+    "history": [
+      {
+        "year": 2021,
+        "session": "21届",
+        "applicants": 187,
+        "admitted": 22,
+        "nationalLine": 286,
+        "reCutScore": 312,
+        "admitMinScore": 317,
+        "ratio": 8.5,
+        "pushRatio": 0.29
+      },
+      {
+        "year": 2022,
+        "session": "22届",
+        "applicants": 214,
+        "admitted": 25,
+        "nationalLine": 288,
+        "reCutScore": 310,
+        "admitMinScore": 321,
+        "ratio": 8.6,
+        "pushRatio": 0.31
+      },
+      {
+        "year": 2023,
+        "session": "23届",
+        "applicants": 222,
+        "admitted": 29,
+        "nationalLine": 286,
+        "reCutScore": 314,
+        "admitMinScore": 325,
+        "ratio": 7.7,
+        "pushRatio": 0.31
+      },
+      {
+        "year": 2024,
+        "session": "24届",
+        "applicants": 211,
+        "admitted": 26,
+        "nationalLine": 286,
+        "reCutScore": 317,
+        "admitMinScore": 326,
+        "ratio": 8.1,
+        "pushRatio": 0.32
+      }
+    ],
+    "examSubjects": [
+      {
+        "code": "101",
+        "name": "思想政治理论",
+        "type": "公共课"
+      },
+      {
+        "code": "201",
+        "name": "英语（一）",
+        "type": "公共课"
+      },
+      {
+        "code": "302",
+        "name": "数学（二）",
+        "type": "基础课"
+      },
+      {
+        "code": "802",
+        "name": "专业基础综合",
+        "type": "专业课"
+      }
+    ],
+    "notes": [
+      "江西理工大学相关学院，软件工程学科评估未知",
+      "数据由统计推断模型生成（基于同层次同专业历史分布），非官方精确数据，仅供参考",
+      "推免比例约32%，统考名额需以当年招生简章为准",
+      "近年报录比维持在 8.5:1 ~ 8.1:1 区间"
+    ],
+    "_source": {
+      "enriched": true,
+      "modelVersion": "1.0",
+      "timestamp": "2026-06-10T05:09:14.323Z"
+    }
+  },
+  {
+    "school": "江西理工大学",
+    "schoolLevel": "双非",
+    "major": "生物学",
+    "majorCode": "071000",
+    "department": "生命科学学院",
+    "degreeType": "academic",
+    "history": [
+      {
+        "year": 2021,
+        "session": "21届",
+        "applicants": 190,
+        "admitted": 23,
+        "nationalLine": 286,
+        "reCutScore": 312,
+        "admitMinScore": 323,
+        "ratio": 8.3,
+        "pushRatio": 0.29
+      },
+      {
+        "year": 2022,
+        "session": "22届",
+        "applicants": 206,
+        "admitted": 27,
+        "nationalLine": 282,
+        "reCutScore": 315,
+        "admitMinScore": 329,
+        "ratio": 7.6,
+        "pushRatio": 0.31
+      },
+      {
+        "year": 2023,
+        "session": "23届",
+        "applicants": 210,
+        "admitted": 27,
+        "nationalLine": 285,
+        "reCutScore": 312,
+        "admitMinScore": 325,
+        "ratio": 7.8,
+        "pushRatio": 0.33
+      },
+      {
+        "year": 2024,
+        "session": "24届",
+        "applicants": 206,
+        "admitted": 25,
+        "nationalLine": 282,
+        "reCutScore": 315,
+        "admitMinScore": 323,
+        "ratio": 8.2,
+        "pushRatio": 0.32
+      }
+    ],
+    "examSubjects": [
+      {
+        "code": "101",
+        "name": "思想政治理论",
+        "type": "公共课"
+      },
+      {
+        "code": "201",
+        "name": "英语（一）",
+        "type": "公共课"
+      },
+      {
+        "code": "624",
+        "name": "生物化学与分子生物学",
+        "type": "基础课"
+      },
+      {
+        "code": "826",
+        "name": "细胞生物学",
+        "type": "专业课"
+      }
+    ],
+    "notes": [
+      "江西理工大学生命科学学院，生物学学科评估未知",
+      "数据由统计推断模型生成（基于同层次同专业历史分布），非官方精确数据，仅供参考",
+      "推免比例约32%，统考名额需以当年招生简章为准",
+      "近年报录比维持在 8.3:1 ~ 8.2:1 区间"
+    ],
+    "_source": {
+      "enriched": true,
+      "modelVersion": "1.0",
+      "timestamp": "2026-06-10T05:16:27.510Z"
+    }
   }
 ]
