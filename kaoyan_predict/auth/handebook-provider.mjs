@@ -50,21 +50,26 @@ function setCachedUniCode(schoolName, uniCode) {
 }
 
 /**
- * 根据学校名称查找 universityCode（快速匹配 + 缓存）
+ * 根据学校名称查找 universityCode（多页搜索 + 缓存）
  */
 async function findUniversityCode(schoolName) {
 	const cached = getCachedUniCode(schoolName)
 	if (cached) return cached
 
-	// 先查 200 条快速匹配
-	const result = await getMajorList({ pageIndex: 1, pageSize: 200 })
-	if (result.Code !== 1) return null
-	const majors = result.Data?.List || []
-	for (const m of majors) {
-		if (m.UniversityName?.includes(schoolName) || schoolName.includes(m.UniversityName)) {
-			setCachedUniCode(schoolName, m.UniversityCode)
-			return m.UniversityCode
+	// 多页搜索，最多翻5页（覆盖所有高校）
+	for (let page = 1; ; page++) {
+		const result = await getMajorList({ pageIndex: page, pageSize: 200 })
+		if (result.Code !== 1) break
+		const majors = result.Data?.List || []
+		if (!majors.length) break
+		for (const m of majors) {
+			if (m.UniversityName?.includes(schoolName) || schoolName.includes(m.UniversityName)) {
+				setCachedUniCode(schoolName, m.UniversityCode)
+				return m.UniversityCode
+			}
 		}
+		// 200条都没找满说明已经是最后一页了
+		if (majors.length < 200) break
 	}
 	return null
 }
@@ -241,11 +246,9 @@ export async function fetchHandebookAdmitData(schoolName, majorName, admitYear =
 }
 
 function inferSchoolLevel(partition) {
-	if (!partition) return "双非"
-	const p = String(partition).toUpperCase()
-	if (p === "A") return "985"
-	if (p === "B") return "211"
-	return "双非"
+	// handebook 的 Partition 是招生批次（A=本科一批 B=本科二批），不是985/211
+	// 无法从 handebook 数据推断学校层次，统一返回待确认
+	return "未确认"
 }
 
 function generateDefaultSubjects(major) {

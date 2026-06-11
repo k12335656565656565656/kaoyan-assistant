@@ -18,7 +18,9 @@ import urllib.error
 import re
 import secrets
 import kaoyan_predict
+from recommend import generate_recommendation
 import extra_streamlit_components as stx
+from dotenv import load_dotenv
 
 # Monkey-patch Streamlit 的 CachedWidgetWarning 检测（CookieManager 在 @st.cache_resource 中需要）
 import streamlit.elements.lib.policies as _policies
@@ -29,6 +31,7 @@ _cc.check_cache_replay_rules = lambda: None
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
+load_dotenv()
 # API配置
 API_KEY = os.environ.get("AI_API_KEY", "")
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
@@ -2664,6 +2667,8 @@ if st.session_state.page == "popularity":
                 raw = kaoyan_predict.predict(school, major)
                 data = kaoyan_predict.normalize_for_ui(raw)
                 st.session_state._kaoyan_cache[cache_key] = data
+                data["_school"] = school.strip()
+                data["_major"] = major.strip() or school.strip()
                 st.session_state._kaoyan_last = cache_key
             except kaoyan_predict.KaoyanPredictError as e:
                 st.error(f"预测失败：{e}")
@@ -2746,6 +2751,117 @@ if st.session_state.page == "popularity":
             with st.expander("📝 备注"):
                 for n in data["notes"]:
                     st.markdown(f"- {n}")
+
+        # ── 个人建议 ──
+        st.markdown("---")
+        st.markdown("### 💡 个人建议")
+
+        uid = st.session_state.get("user_id", 1)
+        profile = get_user_profile(uid)
+
+        if not profile:
+            # 没填画像 → 紧凑表单
+            # target_major 直接用刚查的专业，不用再问
+            query_major = data.get("_major", "")
+            with st.form("recommend_quick_profile"):
+                st.info("📋 你的画像还没填，填写基本信息可获取个性化报考建议")
+                col_q1, col_q2 = st.columns(2)
+                with col_q1:
+                    grade = st.selectbox("年级", ["大一","大二","大三","大四","已毕业"], key="rec_grade")
+                    ug_level = st.selectbox("本科院校", ["985","211","双一流","一本","二本","其他"], key="rec_ug_lvl")
+                with col_q2:
+                    daily_hours = st.number_input("每日学习(小时)", 1.0, 16.0, 6.0, 0.5, key="rec_daily_hours")
+                col_q3, col_q4 = st.columns(2)
+                with col_q3:
+                    cet4 = st.number_input("CET-4成绩", 0, 710, 425, key="rec_cet4")
+                    math_type = st.selectbox("数学考试", ["未确定","数学一","数学二","数学三","不考数学"], key="rec_math")
+                with col_q4:
+                    weak_subjects = st.multiselect("弱科", ["数学","英语","政治","专业课"], key="rec_weak")
+                    anxiety = st.slider("焦虑程度", 1, 5, 3, key="rec_anxiety")
+                if st.form_submit_button("保存并获取建议", use_container_width=True):
+                    # 目标专业直接用查询的
+                    if query_major:
+                        save_profile_field(uid, "target_major", query_major)
+                    for field, val in [
+                        ("grade", grade), ("undergraduate_level", ug_level),
+                        ("daily_hours", daily_hours),
+                        ("cet4_score", int(cet4)), ("math_exam_type", math_type),
+                        ("weak_subjects", json.dumps(weak_subjects, ensure_ascii=False)),
+                        ("anxiety_level", int(anxiety)),
+                    ]:
+                        if val:
+                            save_profile_field(uid, field, val)
+                    st.rerun()
+        else:
+            # 有画像 → 显示摘要 + 编辑入口 + 生成建议
+            # 画像摘要
+            summary_parts = []
+            if profile.get("undergraduate_level"):
+                summary_parts.append(f"本科{profile['undergraduate_level']}")
+            if profile.get("grade"):
+                summary_parts.append(profile["grade"])
+            if profile.get("target_major"):
+                summary_parts.append(f"目标{profile['target_major']}")
+            if profile.get("daily_hours"):
+                summary_parts.append(f"每日{profile['daily_hours']}h")
+            if summary_parts:
+                st.caption("当前画像：" + " · ".join(summary_parts))
+
+            # 编辑入口
+            with st.expander("✏️ 编辑画像"):
+                with st.form("recommend_edit_profile"):
+                    col_e1, col_e2 = st.columns(2)
+                    with col_e1:
+                        grade = st.selectbox("年级", ["大一","大二","大三","大四","已毕业"],
+                            index=["大一","大二","大三","大四","已毕业"].index(profile.get("grade")) if profile.get("grade") in ["大一","大二","大三","大四","已毕业"] else 2,
+                            key="edit_grade")
+                        ug_level = st.selectbox("本科院校", ["985","211","双一流","一本","二本","其他"],
+                            index=["985","211","双一流","一本","二本","其他"].index(profile.get("undergraduate_level")) if profile.get("undergraduate_level") in ["985","211","双一流","一本","二本","其他"] else 2,
+                            key="edit_ug")
+                    with col_e2:
+                        daily_hours = st.number_input("每日学习(小时)", 1.0, 16.0, float(profile.get("daily_hours") or 6.0), 0.5, key="edit_daily")
+                        target_major = st.text_input("目标专业", value=profile.get("target_major") or "", key="edit_target")
+                    col_e3, col_e4 = st.columns(2)
+                    with col_e3:
+                        cet4 = st.number_input("CET-4成绩", 0, 710, int(profile.get("cet4_score") or 425), key="edit_cet4")
+                        math_type = st.selectbox("数学考试", ["未确定","数学一","数学二","数学三","不考数学"],
+                            index=["未确定","数学一","数学二","数学三","不考数学"].index(profile.get("math_exam_type")) if profile.get("math_exam_type") in ["未确定","数学一","数学二","数学三","不考数学"] else 0,
+                            key="edit_math")
+                    with col_e4:
+                        cur_weak = _safe_json_loads(profile.get("weak_subjects"), [])
+                        weak_subjects = st.multiselect("弱科", ["数学","英语","政治","专业课"],
+                            default=cur_weak, key="edit_weak")
+                        anxiety = st.slider("焦虑程度", 1, 5, int(profile.get("anxiety_level") or 3), key="edit_anxiety")
+                    if st.form_submit_button("💾 保存修改", use_container_width=True):
+                        for field, val in [
+                            ("grade", grade), ("undergraduate_level", ug_level),
+                            ("target_major", target_major), ("daily_hours", daily_hours),
+                            ("cet4_score", int(cet4)), ("math_exam_type", math_type),
+                            ("weak_subjects", json.dumps(weak_subjects, ensure_ascii=False)),
+                            ("anxiety_level", int(anxiety)),
+                        ]:
+                            if val or isinstance(val, str):
+                                save_profile_field(uid, field, val)
+                        st.rerun()
+
+            # 生成建议
+            if st.button("🔄 生成/刷新个人建议", use_container_width=True, key="gen_rec"):
+                with st.spinner("🤔 正在结合你的个人画像和院校数据生成建议..."):
+                    try:
+                        rec_text = generate_recommendation(
+                            uid, data,
+                            get_profile_fn=get_user_profile,
+                            call_llm_fn=call_llm_api,
+                        )
+                        if rec_text:
+                            st.session_state._rec_text = rec_text
+                        else:
+                            st.info("请先完善个人画像以获取建议。")
+                    except Exception as e:
+                        st.warning(f"⚠️ 建议生成失败：{e}")
+
+            if st.session_state.get("_rec_text"):
+                st.markdown(st.session_state._rec_text)
 
     elif not submitted:
         st.info("👆 输入学校和专业名称，点击「查询热度」开始分析")
