@@ -197,17 +197,20 @@ export async function getAllMajors({ majorLearningWay = "全日制", batchSize =
 }
 
 /**
- * 根据学校名称查找 universityCode
+ * 根据学校名称查找 universityCode（多页搜索）
  */
 export async function findUniversityCode(schoolName) {
-	// 先查第一页找匹配
-	const result = await getMajorList({ pageIndex: 1, pageSize: 200 })
-	if (result.Code !== 1) return null
-	const majors = result.Data?.List || []
-	for (const m of majors) {
-		if (m.UniversityName?.includes(schoolName) || schoolName.includes(m.UniversityName)) {
-			return m.UniversityCode
+	for (let page = 1; ; page++) {
+		const result = await getMajorList({ pageIndex: page, pageSize: 200 })
+		if (result.Code !== 1) break
+		const majors = result.Data?.List || []
+		if (!majors.length) break
+		for (const m of majors) {
+			if (m.UniversityName?.includes(schoolName) || schoolName.includes(m.UniversityName)) {
+				return m.UniversityCode
+			}
 		}
+		if (majors.length < 200) break
 	}
 	return null
 }

@@ -20,26 +20,32 @@ function hashString(str) {
 async function fetchBilibili(keyword) {
 	try {
 		await randDelay()
-		const url = `https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword=${encodeURIComponent(keyword)}`
-		const res = await fetch(url, { headers: DEFAULT_HEADERS })
+		// 新版搜索API，不需要Cookie也能过
+		const url = `https://api.bilibili.com/x/web-interface/wbi/search/all/v2?keyword=${encodeURIComponent(keyword)}`
+		const res = await fetch(url, {
+			headers: {
+				...DEFAULT_HEADERS,
+				"Origin": "https://search.bilibili.com",
+				"Referer": "https://search.bilibili.com/",
+			},
+		})
 		if (!res.ok) throw new Error(`HTTP ${res.status}`)
 		const data = await res.json()
 		if (data.code !== 0) throw new Error(`code ${data.code}`)
-		const videos = data.data?.result || []
+
+		// 提取视频类型的结果
+		const videoResult = data.data?.result?.find(r => r.result_type === "video")
+		const videos = videoResult?.data || []
 		const now = Date.now() / 1000
 		const thirtyDaysAgo = now - 30 * 86400
 		const sevenDaysAgo = now - 7 * 86400
 
-		let totalPlay = 0, totalDanmaku = 0, totalLike = 0, totalCoin = 0, totalFavorite = 0, totalReply = 0, totalShare = 0
+		let totalPlay = 0, totalDanmaku = 0, totalLike = 0
 		let recent30 = 0, recent7 = 0
 		for (const v of videos) {
 			totalPlay += v.play || 0
 			totalDanmaku += v.danmaku || 0
 			totalLike += v.like || 0
-			totalCoin += v.coin || 0
-			totalFavorite += v.favorite || 0
-			totalReply += v.reply || 0
-			totalShare += v.share || 0
 			if (v.pubdate > thirtyDaysAgo) recent30++
 			if (v.pubdate > sevenDaysAgo) recent7++
 		}
@@ -47,14 +53,14 @@ async function fetchBilibili(keyword) {
 		// 评分：播放分(40) + 近期分(30) + 互动分(30)
 		const playScore = Math.min(40, Math.log10(Math.max(1, totalPlay)) * 8)
 		const recentScore = Math.min(30, (recent30 / 3) * 5 + (recent7 / 1) * 3)
-		const engagement = totalPlay > 0 ? (totalLike + totalCoin + totalFavorite + totalReply + totalDanmaku) / totalPlay : 0
+		const engagement = totalPlay > 0 ? (totalDanmaku + totalLike) / totalPlay : 0
 		const interactScore = Math.min(30, engagement * 300)
 		const score = Math.round(playScore + recentScore + interactScore)
 
 		return {
 			score: Math.min(100, score),
 			source: "real",
-			raw: { videoCount: videos.length, totalPlay, recent30, recent7, engagement: Number(engagement.toFixed(4)) },
+			raw: { videoCount: videos.length, totalPlay, recent30, recent7, totalDanmaku, totalLike },
 		}
 	} catch (e) {
 		return failedScore("bilibili", e.message)
@@ -266,79 +272,38 @@ async function fetchXiaohongshu(keyword) {
 	}
 }
 
-// ===== QQ群（搜狗微信文章 + uapis.cn） =====
+// ===== QQ群 =====
 async function fetchQQqun(keyword) {
 	try {
 		await randDelay()
-		// Step 1: 搜狗微信搜索提取群号
-		const searchKeyword = `${keyword} QQ群`
-		const sogouUrl = `https://weixin.sogou.com/weixin?type=2&query=${encodeURIComponent(searchKeyword)}`
-		const res = await fetch(sogouUrl, { headers: { ...DEFAULT_HEADERS, "Accept": "text/html" } })
+		// 用搜狗web搜"QQ群 关键词"，不用weixin子域名避免验证码
+		const searchKeyword = `QQ群 ${keyword}`
+		const url = `https://www.sogou.com/web?query=${encodeURIComponent(searchKeyword)}`
+		const res = await fetch(url, {
+			headers: { ...DEFAULT_HEADERS, "Accept": "text/html" },
+			redirect: "follow",
+		})
 		if (!res.ok) throw new Error(`HTTP ${res.status}`)
 		const html = await res.text()
 
-		// 提取文章文本
-		const texts = []
-		const titleMatches = html.matchAll(/<h3[^>]*>([\s\S]*?)<\/h3>/gi)
-		for (const m of titleMatches) {
-			const t = m[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
-			if (t.length > 5) texts.push(t)
-		}
-		const summaryMatches = html.matchAll(/<p[^>]*class="[^"]*txt[^"]*"[^>]*>([\s\S]*?)<\/p>/gi)
-		for (const m of summaryMatches) {
-			const t = m[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
-			if (t.length > 5) texts.push(t)
+		// 提取结果数
+		let resultCount = 0
+		const countMatch = html.match(/搜狗已为您找到约?\s*([\d,]+)\s*条/) || html.match(/找到约\s*([\d,]+)\s*条/)
+		if (countMatch) {
+			resultCount = Number.parseInt(countMatch[1].replace(/,/g, ""), 10)
+		} else {
+			// 备选：数QQ群号出现次数
+			const qqMatches = html.match(/\d{5,10}/g) || []
+			resultCount = qqMatches.length
 		}
 
-		// 提取 QQ 群号
-		const allText = texts.join(" ")
-		const groupIds = new Set()
-		const explicitPatterns = [
-			/群号[：:\s]+(\d{5,10})/g, /QQ群[：:\s]+(\d{5,10})/g, /加群[：:\s]+(\d{5,10})/g,
-			/交流群[：:\s]+(\d{5,10})/g, /群号\s*(\d{5,10})/g, /群\s*[Qq]*[：:\s]+(\d{5,10})/g,
-		]
-		for (const p of explicitPatterns) {
-			let m; while ((m = p.exec(allText)) !== null) groupIds.add(m[1])
-		}
-		const bigNumbers = allText.matchAll(/(\d{5,10})/g)
-		for (const m of bigNumbers) {
-			const num = m[1]
-			const idx = m.index
-			const ctx = allText.substring(Math.max(0, idx - 25), Math.min(allText.length, idx + 25))
-			if (/^202[0-9]$/.test(num)) continue
-			if (/群|QQ|加|交流|考研|备考|资料|分享/.test(ctx)) groupIds.add(num)
-		}
-
-		const uniqueIds = Array.from(groupIds).slice(0, 10)
-		if (uniqueIds.length === 0) throw new Error("no group ids")
-
-		// Step 2: uapis.cn 查询群信息
-		let totalMembers = 0
-		let validGroups = 0
-		for (const gid of uniqueIds) {
-			try {
-				await sleep(600)
-				const ures = await fetch(`https://uapis.cn/api/v1/social/qq/groupinfo?group_id=${gid}`, {
-					headers: DEFAULT_HEADERS,
-				})
-				if (!ures.ok) continue
-				const info = await ures.json()
-				if (info.group_id && info.member_count > 0) {
-					totalMembers += info.member_count
-					validGroups++
-				}
-			} catch {}
-		}
-
-		// 评分：群数(40) + 人数(60)
-		const groupScore = Math.min(40, (validGroups / 2) * 12)
-		const memberScore = Math.min(60, Math.log10(Math.max(1, totalMembers || 1)) * 10)
-		const score = Math.round(groupScore + memberScore)
+		// 评分：log10(结果数) * 15，封顶 100
+		const score = Math.min(100, Math.round(Math.log10(Math.max(1, resultCount)) * 15))
 
 		return {
-			score: Math.min(100, score),
+			score,
 			source: "real",
-			raw: { groupCount: validGroups, totalMembers },
+			raw: { resultCount },
 		}
 	} catch (e) {
 		return failedScore("qq", e.message)

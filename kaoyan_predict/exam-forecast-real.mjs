@@ -468,8 +468,15 @@ async function resolveProfile(opts) {
 			profile = hbProfile
 			level = "REAL"
 			dataSource = "handebook.com（真实考试科目+招生人数·公开API）"
-			const planned = profile.history[0]?.admitted || 60
-			profile.history = generateHistoryFromPlanned(planned, school, major)
+			const planned = profile.history[0]?.admitted || 0
+			profile.history = [{
+					year: "2025",
+					applicants: 0,
+					admitted: planned,
+					ratio: 0,
+					cutScore: 0,
+					note: `计划招生 ${planned} 人 | 报录比和复试线需查阅官网`
+				}]
 
 			// 如果有呱呱严选真实数据，用真实复试线/复录比覆盖模拟数据
 			if (ggyxRealHistory && ggyxRealHistory.length > 0) {
@@ -502,72 +509,10 @@ async function resolveProfile(opts) {
 		console.log(`[DataSource] handebook 获取失败: ${e.message}`)
 	}
 
-	// 5. enriched 缓存库（统计推断）
-	const enrichedPath = join(__dirname, "enriched-db.json")
-	const enrichedDb = loadJson(enrichedPath)
-	if (enrichedDb) {
-		const index = buildIndex(enrichedDb)
-		profile = searchProfile(index, school, major, majorCode)
-		if (profile) {
-			level = "ENRICHED"
-			dataSource = "enriched-db（统计推断模型）"
-			return { profile, level, dataSource }
-		}
-	}
+	// 以上均未命中 → 无数据
+		dataSource = "暂未查询到该学校的录取数据"
+		return { profile: null, level: "NONE", dataSource }
 
-	// 6. 旧版呱呱严选（兼容·使用学校名+专业名）
-	try {
-		const { hasGgyxLoginState } = await import("./auth/ggyx-data-provider.mjs")
-		if (hasGgyxLoginState()) {
-			console.log(`[DataSource] 尝试从呱呱严选获取 ${school} ${major || ""} 真实录取数据...`)
-			// 尝试使用新版 provider（需要 xy_id + major_id）
-			// 从环境变量或内置映射获取ID
-			const ggyxIdMap = {
-				"华东师范大学::生物学": { xyId: "597", majorId: "513" },
-				"山东大学::生物学": { xyId: "10422", majorId: "866" },
-			}
-			const key = `${school}::${major || ""}`
-			const ids = ggyxIdMap[key]
-			if (ids) {
-				const { fetchGgyxRealData } = await import("./auth/ggyx-data-provider-v2.mjs")
-				const ggyxProfile = await fetchGgyxRealData(ids.xyId, ids.majorId)
-				if (ggyxProfile && ggyxProfile.history && ggyxProfile.history.length > 0) {
-					profile = ggyxProfile
-					level = "REAL"
-					dataSource = "呱呱严选（真实录取数据·API V2）"
-					return { profile, level, dataSource }
-				}
-			} else {
-				console.log(`[DataSource] 呱呱严选暂无 ${school} ${major} 的ID映射，请手动提供 xy_id 和 major_id`)
-			}
-		}
-	} catch (e) {
-		console.log(`[DataSource] 呱呱严选获取失败: ${e.message}`)
-	}
-
-	// 6. 实时 enrich 生成（统计推断）
-	console.log(`正在实时抓取 ${school} ${major || ""} 数据，约需 2~3 分钟...`)
-	try {
-		const { enrichSchool, saveEnriched } = await import("./enrich.mjs")
-		const records = await enrichSchool(school, major || null)
-		if (records && records.length > 0) {
-			saveEnriched(records)
-			const freshDb = loadJson(enrichedPath)
-			if (freshDb) {
-				const index = buildIndex(freshDb)
-				profile = searchProfile(index, school, major, majorCode)
-				if (profile) {
-					level = "ENRICHED"
-					dataSource = "实时 enrich（统计推断模型）"
-					return { profile, level, dataSource }
-				}
-			}
-		}
-	} catch (e) {
-		console.log(`实时 enrich 失败: ${e.message}，回退到模拟数据`)
-	}
-
-	return { profile, level, dataSource }
 }
 
 async function runForecast(opts) {
@@ -628,20 +573,20 @@ async function runForecast(opts) {
 		const latest = profile.history[profile.history.length - 1]
 		pushRatioDesc = latest.pushRatio ? `推免约 ${Math.round(latest.pushRatio * 100)}%` : "推免比例约 25%"
 	} else {
-		admissionHistory = generateSimulatedHistory(school, major)
-		subjects = generateSimulatedSubjects(major)
-		schoolNotes = [
-			`${school} ${major} 考研信息参考`,
-			"推免比例约25%，统考名额相对充足",
-			"复试线通常高于国家线 30-50 分",
-		]
-		schoolLevel = "985"
-		department = "相关学院"
-		pushRatioDesc = "推免比例约 25%"
+		// 无数据 → 不编造，返回空
+		admissionHistory = []
+		subjects = []
+		schoolNotes = [`暂未查询到 ${school} ${major} 的录取数据`]
+		schoolLevel = "未知"
+		department = "未知"
+		pushRatioDesc = "暂无数据"
 	}
 
-	const prediction = predictToSession(admissionHistory, targetYear)
-	const dataHeat = prediction.heatEstimate // 数据维度 0-100
+	const noDataAvailable = admissionHistory.length === 0
+	const prediction = noDataAvailable
+		? { session: targetYear + "届", year: targetYear, estimatedApplicants: 0, estimatedRatio: 0, estimatedCutScore: 0, heatEstimate: 0 }
+		: predictToSession(admissionHistory, targetYear)
+	const dataHeat = noDataAvailable ? 0 : prediction.heatEstimate
 
 	// 抓取媒体热度（数据维度 * 0.65 + 媒体维度 * 0.35）
 	let mediaHeat = 0, mediaSuccessCount = 0, mediaFailedPlatforms = [], mediaPlatforms = []
@@ -657,20 +602,20 @@ async function runForecast(opts) {
 			weight: p.weight,
 		}))
 	} catch {
-		mediaHeat = Math.round(30 + hashString(school + major) % 40)
+		mediaHeat = 0
 	}
 
 	// 推免比例微调数据维度（推免越高 → 统考竞争越激烈 → 热度越高）
-	const latest = admissionHistory[admissionHistory.length - 1]
-	const pushRatio = latest?.pushRatio ?? 0.25
-	const pushBonus = Math.round(pushRatio * 20) // 推免 50% → +10 分
+	const latest = admissionHistory.length > 0 ? admissionHistory[admissionHistory.length - 1] : null
+	const pushRatio = latest?.pushRatio ?? 0
+	const pushBonus = Math.round(pushRatio * 20)
 	const adjustedDataHeat = Math.min(100, dataHeat + pushBonus)
 
 	// 百分制综合热度
-	let compositeHeat = Math.round(adjustedDataHeat * 0.65 + mediaHeat * 0.35)
+	let compositeHeat = noDataAvailable ? 0 : Math.round(adjustedDataHeat * 0.65 + mediaHeat * 0.35)
 
-	// 有真实录取数据的查询加成（弥补媒体抓取失败导致的热度低估）
-	if (dataSource.includes("呱呱严选") || dataSource.includes("builtin-db")) {
+	// 有真实录取数据的查询加成
+	if (!noDataAvailable && (dataSource.includes("呱呱严选") || dataSource.includes("builtin-db"))) {
 		compositeHeat = Math.min(100, compositeHeat + 8)
 	}
 

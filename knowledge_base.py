@@ -5,12 +5,14 @@
 
 import streamlit as st
 import sqlite3
+import os
+from dotenv import load_dotenv
+load_dotenv()
 import json
 import base64
 import urllib.request
 import urllib.error
 import re
-import os
 from pathlib import Path
 
 # ==================== 配置（从环境变量读取） ====================

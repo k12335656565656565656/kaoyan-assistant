@@ -20,7 +20,9 @@ import urllib.error
 import re
 import secrets
 import kaoyan_predict
+from recommend import generate_recommendation
 import extra_streamlit_components as stx
+from dotenv import load_dotenv
 
 # Monkey-patch Streamlit 的 CachedWidgetWarning 检测（CookieManager 在 @st.cache_resource 中需要）
 import streamlit.elements.lib.policies as _policies
@@ -31,6 +33,7 @@ _cc.check_cache_replay_rules = lambda: None
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
+load_dotenv()
 # API配置
 API_KEY = os.environ.get("AI_API_KEY", "")
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
@@ -1673,19 +1676,8 @@ def create_review_challenge(kid):
 # ==================== 复习题目生成 ====================
 
 def _fix_latex(text):
-    r"""Convert \(\) to $, \[\] to $$, wrap bare LaTeX commands in $"""
+    r"""Convert \(\) to $, \[\] to $$"""
     text = text.replace("\\( ", "$ ").replace(" \\)", " $").replace("\\(", "$").replace("\\)", "$").replace("\\[", "$$").replace("\\]", "$$")
-    # Wrap bare single-backslash LaTeX commands in $...$
-    # e.g. \lim_{h \to 0} \frac{a}{b} → $\lim_{h \to 0} \frac{a}{b}$
-    def _wrap_bare_latex(m):
-        s = m.group(0)
-        if "$" in s:
-            return s
-        return f"${s}$"
-    try:
-        text = re.sub(r'(?<!\$)(\\(?:lim|frac|sqrt|int|sum|prod|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|sigma|omega|pi|rho|tau|phi|psi|chi|infty|partial|nabla|forall|exists|in|notin|subset|supset|cup|cap|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|sim|propto|rightarrow|leftarrow|leftrightarrow|Rightarrow|Leftarrow|leftrightarrow|vec|hat|bar|dot|ddot|overline|underline|overbrace|underbrace|left\(|right\)|Big|big|left\[|right\])\b[^\n$]*', _wrap_bare_latex, text)
-    except:
-        pass
     return text
 
 def _collapse_math(text):
@@ -1701,9 +1693,9 @@ def _escape_md(text):
     if "\\" not in text:
         return text
     # Protect $$...$$ blocks: double backslashes inside them
-    text = re.sub(r'(\$\$.+?\$\$)', lambda m: m.group(1).replace("\\\\", "\\\\\\\\\\\\\\\\"), text, flags=re.DOTALL)
+    text = re.sub(r'(\$\$.+?\$\$)', lambda m: m.group(1).replace("\\\\", "\\\\\\\\"), text, flags=re.DOTALL)
     # Protect $...$ blocks
-    text = re.sub(r'(?<!\$)(\$[^$\n]+\$)(?!\$)', lambda m: m.group(1).replace("\\\\", "\\\\\\\\\\\\\\\\"), text)
+    text = re.sub(r'(?<!\$)(\$[^$\n]+\$)(?!\$)', lambda m: m.group(1).replace("\\\\", "\\\\\\\\"), text)
     return text
 
 def _katex_refresh():
@@ -1851,9 +1843,14 @@ def generate_review_questions(knowledge_points):
 
         system_prompt = """你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
 
-⚠️ 所有数学公式必须用 \\(\\) 包裹，例如 \\(f(x)\\)、\\(\\frac{a}{b}\\)、\\(\\lim_{x \\to 0}\\)。不要用 \\[\\] 或 $$。
 ⚠️ 题目必须紧扣知识点核心概念，不得偏题。
 ⚠️ 直接输出题目内容，不要输出"首先"、"我需要"等思考过程。
+
+⚠️ 数学公式强制规则（必须遵守，否则无法显示）：
+- 所有公式必须用 $...$ 包裹，例如 $f(x)$、$\int_{a}^{b}$、$\frac{a}{b}$
+- 独立公式用 $$...$$，例如 $$\lim_{x \to 0} \frac{\sin x}{x} = 1$$
+- 禁止使用 \\(\\) 或 \\[\\]
+- 禁止在 $ 外面写 \\frac、\\int、\\lim、\\pi 等 LaTeX 命令
 
 严格按以下格式输出（不要输出格式说明之外的任何内容）：
 Q: 题目（用文字描述）
@@ -1865,15 +1862,19 @@ ANSWER: 正确选项字母
 EXPLAIN: 解析过程
 ---"""
 
+        # 注入激活的 Skill prompt
+        skill_prompt = build_system_prompt_with_skills(st.session_state.get("active_skills", []))
+        full_system = system_prompt + ("\n\n---\n\n" + skill_prompt if skill_prompt else "")
+
         user_prompt = f"为以下知识点出1道选择题：\n\n{kb_list}\n\n{context_text}"
 
         request_data = {
             "model": "mimo-v2.5",
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": full_system},
                 {"role": "user", "content": user_prompt}
             ],
-            "max_tokens": 1000,
+            "max_tokens": 5000,
             "temperature": 0.3
         }
 
@@ -1890,14 +1891,23 @@ EXPLAIN: 解析过程
         with urllib.request.urlopen(req, timeout=120) as response:
             result = json.loads(response.read().decode('utf-8'))
             msg = result['choices'][0]['message']
-            raw = _extract_content(msg)
-            # MiMo 思维链模型可能把题目放在 reasoning_content 中
-            if not raw or "Q:" not in raw:
-                reasoning = msg.get("reasoning_content") or ""
-                # 从 reasoning_content 中提取 Q:...--- 格式
+            # MiMo 思维链模型：content 和 reasoning_content 都可能包含答案
+            content = msg.get('content') or ''
+            reasoning = msg.get('reasoning_content') or ''
+            raw = content if content and 'Q:' in content else ''
+            # 从 reasoning_content 中提取 Q:...--- 格式
+            if not raw:
                 q_match = re.search(r'(Q:.*?---)', reasoning, re.DOTALL)
                 if q_match:
                     raw = q_match.group(1)
+            # 兜底：从合并文本中提取
+            if not raw:
+                combined = content + '\n' + reasoning
+                q_match = re.search(r'(Q:.*?---)', combined, re.DOTALL)
+                if q_match:
+                    raw = q_match.group(1)
+            if not raw:
+                raw = content or reasoning
             return {
                 "success": True,
                 "questions": raw,
@@ -1994,11 +2004,19 @@ def run_pipeline(query, results, model_name, img_data=None):
     skill_prompt = build_system_prompt_with_skills(st.session_state.get("active_skills", []))
     context = "\n\n".join([f"【{d['id']}】\n{d['text'][:800]}" for d in results[:3]]) if results else ""
 
+    math_rules = r"""- 所有公式必须用 $...$ 包裹，例如 $f(x)$、$\int_{a}^{b}$、$\frac{a}{b}$
+- 独立公式用 $$...$$，例如 $$\lim_{x \to 0} \frac{\sin x}{x} = 1$$
+- 禁止使用 \( \) 或 \[ \]
+- 禁止在 $ 外面写 \frac、\int、\lim、\pi 等 LaTeX 命令"""
+
     system_prompt = f"""你是考研数学辅导专家。请完成以下任务并用标签输出：
 
-任务1：根据参考资料回答用户问题。{"严格遵循 Skill 的格式要求。" if skill_prompt else "使用LaTeX公式（$...$），回答简洁准确。"}
+任务1：根据参考资料回答用户问题。{"严格遵循 Skill 的格式要求。" if skill_prompt else ""}
 
 任务2：判断问题涉及的知识点，输出概念名称（如：导数, 定积分, 矩阵）。
+
+⚠️ 数学公式强制规则（必须遵守，否则无法显示）：
+{math_rules}
 
 输出格式：
 [ANSWER]
@@ -2666,6 +2684,8 @@ if st.session_state.page == "popularity":
                 raw = kaoyan_predict.predict(school, major)
                 data = kaoyan_predict.normalize_for_ui(raw)
                 st.session_state._kaoyan_cache[cache_key] = data
+                data["_school"] = school.strip()
+                data["_major"] = major.strip() or school.strip()
                 st.session_state._kaoyan_last = cache_key
             except kaoyan_predict.KaoyanPredictError as e:
                 st.error(f"预测失败：{e}")
@@ -2748,6 +2768,117 @@ if st.session_state.page == "popularity":
             with st.expander("📝 备注"):
                 for n in data["notes"]:
                     st.markdown(f"- {n}")
+
+        # ── 个人建议 ──
+        st.markdown("---")
+        st.markdown("### 💡 个人建议")
+
+        uid = st.session_state.get("user_id", 1)
+        profile = get_user_profile(uid)
+
+        if not profile:
+            # 没填画像 → 紧凑表单
+            # target_major 直接用刚查的专业，不用再问
+            query_major = data.get("_major", "")
+            with st.form("recommend_quick_profile"):
+                st.info("📋 你的画像还没填，填写基本信息可获取个性化报考建议")
+                col_q1, col_q2 = st.columns(2)
+                with col_q1:
+                    grade = st.selectbox("年级", ["大一","大二","大三","大四","已毕业"], key="rec_grade")
+                    ug_level = st.selectbox("本科院校", ["985","211","双一流","一本","二本","其他"], key="rec_ug_lvl")
+                with col_q2:
+                    daily_hours = st.number_input("每日学习(小时)", 1.0, 16.0, 6.0, 0.5, key="rec_daily_hours")
+                col_q3, col_q4 = st.columns(2)
+                with col_q3:
+                    cet4 = st.number_input("CET-4成绩", 0, 710, 425, key="rec_cet4")
+                    math_type = st.selectbox("数学考试", ["未确定","数学一","数学二","数学三","不考数学"], key="rec_math")
+                with col_q4:
+                    weak_subjects = st.multiselect("弱科", ["数学","英语","政治","专业课"], key="rec_weak")
+                    anxiety = st.slider("焦虑程度", 1, 5, 3, key="rec_anxiety")
+                if st.form_submit_button("保存并获取建议", use_container_width=True):
+                    # 目标专业直接用查询的
+                    if query_major:
+                        save_profile_field(uid, "target_major", query_major)
+                    for field, val in [
+                        ("grade", grade), ("undergraduate_level", ug_level),
+                        ("daily_hours", daily_hours),
+                        ("cet4_score", int(cet4)), ("math_exam_type", math_type),
+                        ("weak_subjects", json.dumps(weak_subjects, ensure_ascii=False)),
+                        ("anxiety_level", int(anxiety)),
+                    ]:
+                        if val:
+                            save_profile_field(uid, field, val)
+                    st.rerun()
+        else:
+            # 有画像 → 显示摘要 + 编辑入口 + 生成建议
+            # 画像摘要
+            summary_parts = []
+            if profile.get("undergraduate_level"):
+                summary_parts.append(f"本科{profile['undergraduate_level']}")
+            if profile.get("grade"):
+                summary_parts.append(profile["grade"])
+            if profile.get("target_major"):
+                summary_parts.append(f"目标{profile['target_major']}")
+            if profile.get("daily_hours"):
+                summary_parts.append(f"每日{profile['daily_hours']}h")
+            if summary_parts:
+                st.caption("当前画像：" + " · ".join(summary_parts))
+
+            # 编辑入口
+            with st.expander("✏️ 编辑画像"):
+                with st.form("recommend_edit_profile"):
+                    col_e1, col_e2 = st.columns(2)
+                    with col_e1:
+                        grade = st.selectbox("年级", ["大一","大二","大三","大四","已毕业"],
+                            index=["大一","大二","大三","大四","已毕业"].index(profile.get("grade")) if profile.get("grade") in ["大一","大二","大三","大四","已毕业"] else 2,
+                            key="edit_grade")
+                        ug_level = st.selectbox("本科院校", ["985","211","双一流","一本","二本","其他"],
+                            index=["985","211","双一流","一本","二本","其他"].index(profile.get("undergraduate_level")) if profile.get("undergraduate_level") in ["985","211","双一流","一本","二本","其他"] else 2,
+                            key="edit_ug")
+                    with col_e2:
+                        daily_hours = st.number_input("每日学习(小时)", 1.0, 16.0, float(profile.get("daily_hours") or 6.0), 0.5, key="edit_daily")
+                        target_major = st.text_input("目标专业", value=profile.get("target_major") or "", key="edit_target")
+                    col_e3, col_e4 = st.columns(2)
+                    with col_e3:
+                        cet4 = st.number_input("CET-4成绩", 0, 710, int(profile.get("cet4_score") or 425), key="edit_cet4")
+                        math_type = st.selectbox("数学考试", ["未确定","数学一","数学二","数学三","不考数学"],
+                            index=["未确定","数学一","数学二","数学三","不考数学"].index(profile.get("math_exam_type")) if profile.get("math_exam_type") in ["未确定","数学一","数学二","数学三","不考数学"] else 0,
+                            key="edit_math")
+                    with col_e4:
+                        cur_weak = _safe_json_loads(profile.get("weak_subjects"), [])
+                        weak_subjects = st.multiselect("弱科", ["数学","英语","政治","专业课"],
+                            default=cur_weak, key="edit_weak")
+                        anxiety = st.slider("焦虑程度", 1, 5, int(profile.get("anxiety_level") or 3), key="edit_anxiety")
+                    if st.form_submit_button("💾 保存修改", use_container_width=True):
+                        for field, val in [
+                            ("grade", grade), ("undergraduate_level", ug_level),
+                            ("target_major", target_major), ("daily_hours", daily_hours),
+                            ("cet4_score", int(cet4)), ("math_exam_type", math_type),
+                            ("weak_subjects", json.dumps(weak_subjects, ensure_ascii=False)),
+                            ("anxiety_level", int(anxiety)),
+                        ]:
+                            if val or isinstance(val, str):
+                                save_profile_field(uid, field, val)
+                        st.rerun()
+
+            # 生成建议
+            if st.button("🔄 生成/刷新个人建议", use_container_width=True, key="gen_rec"):
+                with st.spinner("🤔 正在结合你的个人画像和院校数据生成建议..."):
+                    try:
+                        rec_text = generate_recommendation(
+                            uid, data,
+                            get_profile_fn=get_user_profile,
+                            call_llm_fn=call_llm_api,
+                        )
+                        if rec_text:
+                            st.session_state._rec_text = rec_text
+                        else:
+                            st.info("请先完善个人画像以获取建议。")
+                    except Exception as e:
+                        st.warning(f"⚠️ 建议生成失败：{e}")
+
+            if st.session_state.get("_rec_text"):
+                st.markdown(st.session_state._rec_text)
 
     elif not submitted:
         st.info("👆 输入学校和专业名称，点击「查询热度」开始分析")
@@ -3724,8 +3855,10 @@ with mid_col:
 
         if answer_text.strip():
             answer_placeholder = st.empty()
-            _typing_display(answer_placeholder, _escape_md(_collapse_math(answer_text.strip())), delay=0.02)
+            _typing_display(answer_placeholder, _escape_md(_collapse_math(_fix_latex(answer_text.strip()))), delay=0.02)
             _katex_refresh()
+            # 保存 answer_text，供 rerun 时重新渲染（如切标签页后 WebSocket 断连）
+            st.session_state._last_answer_text = answer_text.strip()
         st.markdown('</div>', unsafe_allow_html=True)
         # 诊断：GLM 原始输出
         if output.get("_raw_debug"):
@@ -3760,6 +3893,24 @@ with mid_col:
         st.session_state._last_output = output
         st.session_state._last_query = query
         st.session_state._last_results = results
+
+    elif st.session_state.get("_last_answer_text"):
+        # 重新渲染上次回答（如切标签页 WebSocket 断连后 rerun，submitted=False 但答案仍在）
+        st.markdown('<div class="qa-card">', unsafe_allow_html=True)
+        st.markdown("### 💡 回答")
+        answer_placeholder = st.empty()
+        answer_placeholder.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._last_answer_text))))
+        _katex_refresh()
+        st.markdown('</div>', unsafe_allow_html=True)
+        last_results = st.session_state.get("_last_results", [])
+        if last_results:
+            st.markdown("### 📋 使用的参考资料")
+            ref_html = ""
+            for r in last_results:
+                ref_html += f"<span class='ref-tag'>📄 {_clean_knowledge_name(r['id'])} ×{r['score']}</span>"
+            st.markdown(ref_html, unsafe_allow_html=True)
+        else:
+            st.caption("📡 回答来自LLM自身知识")
 
     # 出2道练习题按钮 + 评价按钮（在 mid_col 内，不在 if submitted 内）
     # 显示上一次操作的反馈消息
@@ -3855,9 +4006,9 @@ with tab1:
             with st.expander(f"📄 {_clean_knowledge_name(kid)} ({r['score']})"):
                 st.markdown(r['text'][:1500])
                 if st.button("🎲 出题", key=f"kb_s_{kid}"):
-                    progress = st.progress(0, text="生成中...")
+                    st.progress(0, text="生成中...")
                     st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
-                    progress.progress(100, text="✅ 完成")
+                    st.progress(100, text="✅ 完成")
                     st.session_state._kb_qid = kid
                     st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
@@ -3865,15 +4016,16 @@ with tab1:
                     st.session_state.pop("_kb_qid", None)
                     if quiz and quiz.get("success"):
                         render_qa_cards(quiz['questions'], columns=1, typing=True)
+
     else:
         for doc in filtered_corpus:
             kid = doc['id']
             with st.expander(f"📄 {_clean_knowledge_name(kid)}"):
                 st.markdown(doc['text'][:1500])
                 if st.button("🎲 出题", key=f"kb_d_{kid}"):
-                    progress = st.progress(0, text="生成中...")
+                    st.progress(0, text="生成中...")
                     st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
-                    progress.progress(100, text="✅ 完成")
+                    st.progress(100, text="✅ 完成")
                     st.session_state._kb_qid = kid
                     st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
@@ -3914,7 +4066,7 @@ with tab2:
                 quiz = st.session_state.pop("_rev_quiz", None)
                 st.session_state.pop("_rev_quiz_id", None)
                 if quiz and quiz.get("success"):
-                    render_qa_cards(quiz['questions'], columns=1, typing=True)
+                    render_qa_cards(quiz['questions'], columns=1)
 
         if not candidates:
             st.success("🎉 暂无待复习知识点。使用问答后自动添加。")
