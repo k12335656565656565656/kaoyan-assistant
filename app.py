@@ -4,8 +4,6 @@
 """
 import streamlit as st
 import os
-from dotenv import load_dotenv
-load_dotenv()
 import json
 import sqlite3
 import math
@@ -18,14 +16,14 @@ from datetime import datetime, date, timedelta
 import urllib.request
 import urllib.error
 import re
-import io
 import secrets
-from docx import Document
-from docx.shared import Pt
+import io
 import kaoyan_predict
 from recommend import generate_recommendation
 import extra_streamlit_components as stx
 from dotenv import load_dotenv
+from docx import Document
+from docx.shared import Pt
 
 # Monkey-patch Streamlit 的 CachedWidgetWarning 检测（CookieManager 在 @st.cache_resource 中需要）
 import streamlit.elements.lib.policies as _policies
@@ -36,11 +34,10 @@ _cc.check_cache_replay_rules = lambda: None
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
-load_dotenv()
 # API配置
-API_KEY = os.environ.get("AI_API_KEY", "")
-API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
-MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5")
+API_KEY = ""
+API_BASE = "https://api.xiaomimimo.com/v1"
+MODEL_NAME = "mimo-v2.5"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
 # 考纲分类：数学一独有 / 数学三独有
@@ -49,9 +46,9 @@ MATH3_ONLY = {"107", "110"}
 
 DATA_DIR = Path("data/corpus")
 DEMO_DATA_DIR = Path("data/corpus_demo")
+REFERENCE_DIR = Path("data/reference")
 MEMORY_DB = "data/memory.db"
 EXPERIENCE_FILE = "agent_experience.md"
-REFERENCE_DIR = Path("data/reference")
 
 # ==================== CSS样式 ====================
 st.markdown("""
@@ -100,6 +97,7 @@ st.markdown("""
         div[data-testid="stMetricValue"] { font-size: 0.95rem !important; }
         div[data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
     }
+    .quiz-area { max-height: 600px; overflow-y: auto; padding-right: 4px; }
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 """, unsafe_allow_html=True)
@@ -1941,6 +1939,197 @@ EXPLAIN: 在知识库中查看完整内容
         "knowledge_points": [kp['knowledge_id'] for kp in knowledge_points[:3]]
     }
 
+# ==================== 学习资料 - 辅助函数 ====================
+
+def _read_reference_docx_structure():
+    """读取 data/reference/ 下的参考 docx 文档，提取段落层级结构作为格式参考"""
+    structure_desc = []
+    for ref_file in sorted(REFERENCE_DIR.glob("*.docx")):
+        try:
+            doc = Document(ref_file)
+            lines = []
+            for p in doc.paragraphs[:60]:  # 只取前60段看清结构
+                style = p.style.name if p.style else "Normal"
+                text = p.text.strip()
+                if text:
+                    lines.append(f"[{style}] {text[:120]}")
+            if lines:
+                structure_desc.append(f"### 《{ref_file.stem}》结构示例：\n" + "\n".join(lines))
+        except Exception:
+            pass
+    return "\n\n".join(structure_desc) if structure_desc else "（暂无参考文档）"
+
+
+def _build_material_prompt(selected_topics, user_requirement):
+    """根据用户选择的知识点和需求，构建发给 AI 的 prompt"""
+    # 读取 corpus 内容
+    corpus_parts = []
+    corpus_files = sorted(DATA_DIR.glob("*.md"))
+    for fp in corpus_files:
+        if selected_topics and fp.stem not in selected_topics:
+            continue
+        try:
+            content = fp.read_text(encoding="utf-8")[:1500]  # 每个知识点最多取1500字
+            corpus_parts.append(f"### {fp.stem}\n{content}")
+        except Exception:
+            pass
+
+    corpus_text = "\n\n".join(corpus_parts) if corpus_parts else "（使用全部知识点）"
+
+    # 读取参考 docx 格式
+    ref_structure = _read_reference_docx_structure()
+
+    # 读取 LaTeX 格式规范 skill
+    latex_skill_path = Path("skills/latex-formatter/SKILL.md")
+    latex_rules = ""
+    if latex_skill_path.exists():
+        latex_rules = latex_skill_path.read_text(encoding="utf-8")
+    else:
+        # 兜底：内嵌最基础的 LaTeX 规则
+        latex_rules = """## LaTeX 格式强制规则
+- 行内公式只用 $...$，禁止 \\(...\\)
+- 独立公式只用 $$...$$，禁止 \\[...\\]
+- \\\\ 只能出现在 $$...$$ 内
+- 禁止在 $...$ 外用 \\frac、\\lim 等 LaTeX 命令"""
+
+    prompt = f"""你是考研数学辅导专家。请根据提供的知识点内容，仿照参考文档的格式，生成一份考研数学学习/习题资料。
+
+## 格式要求（参考 data/reference/ 下的文档结构）
+
+参考文档采用以下层级：
+{ref_structure}
+
+请你用 Markdown 格式输出，层级规则：
+- # 一级标题：章标题（如 # 第一章 凑元换元法）
+- ## 二级标题：节标题（如 ## 含参变量积分）
+- ### 三级标题：题号/子标题（如 ### 第 1 题）
+- 每个题目或知识点包含：题目/概念 → 分析/提示 → 解答/推导 → 方法总结
+
+{latex_rules}
+
+## 知识点参考内容
+
+{corpus_text}
+
+## 用户需求
+
+{user_requirement}
+
+请直接输出生成的内容，无需额外说明。"""
+
+    return prompt
+
+
+def _build_english_material_prompt(category, user_requirement, vocab_category=""):
+    """根据用户选择的分类和需求，构建发给 AI 的英语资料 prompt"""
+    if category == "单词归类总结":
+        prompt = f"""你是考研英语词汇专家。请根据用户选择的分类方式，生成一份考研英语词汇归类总结。
+
+## 输出要求
+
+1. **结构清晰**：按分类维度组织词汇，每个类别用标题分隔
+2. **信息完整**：每个单词包含词性、中文释义、英文例句、记忆技巧
+3. **实用性强**：提供真题出处和常见搭配
+4. **格式规范**：
+   - 一级标题：分类维度（如"经济类词汇"）
+   - 二级标题：子分类（如"宏观经济学"）
+   - 每个单词：词性 + 释义 + 例句 + 记忆技巧 + 真题出处
+
+## 分类维度
+
+{vocab_category}
+
+## 用户需求
+
+{user_requirement}
+
+请直接输出生成的内容，无需额外说明。"""
+    else:
+        category_prompts = {
+            "语法专题": "你是考研英语语法专家。请生成一份语法专题学习资料，包含：语法规则、例句、真题、易错点、记忆技巧。",
+            "阅读技巧": "你是考研英语阅读专家。请生成一份阅读技巧学习资料，包含：题型特征、解题步骤、真题演示、注意事项。",
+            "写作模板": "你是考研英语写作专家。请生成一份写作模板学习资料，包含：模板结构、高分句型、真题范文、评分标准。",
+            "翻译技巧": "你是考研英语翻译专家。请生成一份翻译技巧学习资料，包含：翻译原则、技巧、真题演示、常见错误。",
+            "完形填空": "你是考研英语完形填空专家。请生成一份完形填空学习资料，包含：逻辑关系、固定搭配、真题演示、解题策略。",
+            "新题型": "你是考研英语新题型专家。请生成一份新题型学习资料，包含：题型特征、解题步骤、真题演示、注意事项。",
+        }
+        system_prompt = category_prompts.get(category, "你是考研英语辅导专家。")
+        prompt = f"""{system_prompt}
+
+## 输出要求
+
+1. **结构清晰**：使用 Markdown 标题层级组织内容
+2. **知识点完整**：每个知识点包含定义、规则、例句、真题
+3. **例句真实**：使用考研真题例句或符合考研难度的例句
+4. **实用性强**：提供解题技巧和常见错误提示
+5. **格式规范**：
+   - 一级标题：章节名称
+   - 二级标题：知识点名称
+   - 三级标题：子知识点
+   - 每个知识点包含：定义 → 规则 → 例句 → 真题 → 技巧
+
+## 用户需求
+
+{user_requirement}
+
+请直接输出生成的内容，无需额外说明。"""
+    return prompt
+
+
+def _generate_material(prompt):
+    """调用 AI 生成资料内容，返回 (思考过程, 最终结果)"""
+    data = {
+        "model": "mimo-v2.5",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 4096,
+        "temperature": 0.3,
+    }
+    try:
+        req = urllib.request.Request(
+            API_BASE + "/chat/completions",
+            data=json.dumps(data).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
+        reasoning = msg.get("reasoning_content") or ""
+        content = msg.get("content") or ""
+        # 如果模型不区分思考/结果，则全部作为结果
+        if not content and reasoning:
+            content = reasoning
+            reasoning = ""
+        return reasoning, content
+    except Exception as e:
+        raise RuntimeError(f"AI 调用失败: {e}")
+
+
+def _ai_output_to_docx_via_pandoc(markdown_text):
+    """用 Pandoc 将 Markdown+LaTeX 转为 DOCX（LaTeX 完美渲染）"""
+    import tempfile
+    import subprocess
+    template = str(Path(__file__).parent / "data" / "reference" / "template.docx")
+    with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w", encoding="utf-8") as md:
+        md.write(markdown_text)
+        md_path = md.name
+    docx_path = md_path.replace(".md", ".docx")
+    try:
+        cmd = ["pandoc", md_path, "-o", docx_path, "--mathml", "--from", "markdown", "--to", "docx"]
+        if os.path.exists(template):
+            cmd += ["--reference-doc", template]
+        subprocess.run(cmd, check=True, capture_output=True)
+        with open(docx_path, "rb") as f:
+            result = f.read()
+        return result
+    finally:
+        if os.path.exists(md_path):
+            os.unlink(md_path)
+        if os.path.exists(docx_path):
+            os.unlink(docx_path)
+
+
+
+
 # ==================== 多Agent管线 ====================
 
 def extract_json(text):
@@ -2619,27 +2808,25 @@ if st.session_state.page == "hub":
                 st.rerun()
     with col4:
         with st.container(border=True):
-            st.markdown("### 📚 学习资料")
-            st.caption("真题试卷 · 笔记资料 · 备考干货")
-            if st.button("进入学习资料", key="hub_material", use_container_width=True):
-                st.session_state.page = "material"
-                st.rerun()
-
-    col5, col6 = st.columns(2)
-    with col5:
-        with st.container(border=True):
             st.markdown("### 💬 提建议")
             st.caption("反馈问题 · 提出需求")
             if st.button("提交建议", key="hub_suggest", use_container_width=True):
                 st.session_state.page = "suggest"
                 st.rerun()
-    with col6:
-        with st.container(border=True):
-            st.markdown("### 📅 打卡督学")
-            st.caption("每日打卡 · 学习计划 · 学习日记 · 番茄计时")
-            if st.button("进入打卡督学", key="hub_checkin", use_container_width=True):
-                st.session_state.page = "checkin"
-                st.rerun()
+
+    with st.container(border=True):
+        st.markdown("### 📚 学习资料")
+        st.caption("AI 生成习题册 · 知识点整理 · 备考资料")
+        if st.button("进入学习资料", key="hub_material", use_container_width=True):
+            st.session_state.page = "material"
+            st.rerun()
+
+    with st.container(border=True):
+        st.markdown("### 📅 打卡督学")
+        st.caption("每日打卡 · 学习计划 · 学习日记 · 番茄计时")
+        if st.button("进入打卡督学", key="hub_checkin", use_container_width=True):
+            st.session_state.page = "checkin"
+            st.rerun()
 
     # （专业知识库入口已移至独立模块，暂不显示）
     # with st.container(border=True):
@@ -2790,41 +2977,8 @@ if st.session_state.page == "popularity":
         profile = get_user_profile(uid)
 
         if not profile:
-            # 没填画像 → 紧凑表单
-            # target_major 直接用刚查的专业，不用再问
-            query_major = data.get("_major", "")
-            with st.form("recommend_quick_profile"):
-                st.info("📋 你的画像还没填，填写基本信息可获取个性化报考建议")
-                col_q1, col_q2 = st.columns(2)
-                with col_q1:
-                    grade = st.selectbox("年级", ["大一","大二","大三","大四","已毕业"], key="rec_grade")
-                    ug_level = st.selectbox("本科院校", ["985","211","双一流","一本","二本","其他"], key="rec_ug_lvl")
-                with col_q2:
-                    daily_hours = st.number_input("每日学习(小时)", 1.0, 16.0, 6.0, 0.5, key="rec_daily_hours")
-                col_q3, col_q4 = st.columns(2)
-                with col_q3:
-                    cet4 = st.number_input("CET-4成绩", 0, 710, 425, key="rec_cet4")
-                    math_type = st.selectbox("数学考试", ["未确定","数学一","数学二","数学三","不考数学"], key="rec_math")
-                with col_q4:
-                    weak_subjects = st.multiselect("弱科", ["数学","英语","政治","专业课"], key="rec_weak")
-                    anxiety = st.slider("焦虑程度", 1, 5, 3, key="rec_anxiety")
-                if st.form_submit_button("保存并获取建议", use_container_width=True):
-                    # 目标专业直接用查询的
-                    if query_major:
-                        save_profile_field(uid, "target_major", query_major)
-                    for field, val in [
-                        ("grade", grade), ("undergraduate_level", ug_level),
-                        ("daily_hours", daily_hours),
-                        ("cet4_score", int(cet4)), ("math_exam_type", math_type),
-                        ("weak_subjects", json.dumps(weak_subjects, ensure_ascii=False)),
-                        ("anxiety_level", int(anxiety)),
-                    ]:
-                        if val:
-                            save_profile_field(uid, field, val)
-                    st.rerun()
+            st.info("📋 请先在「打卡督学 → 学习画像」中填写个人信息，以获取个性化报考建议。")
         else:
-            # 有画像 → 显示摘要 + 编辑入口 + 生成建议
-            # 画像摘要
             summary_parts = []
             if profile.get("undergraduate_level"):
                 summary_parts.append(f"本科{profile['undergraduate_level']}")
@@ -2832,50 +2986,14 @@ if st.session_state.page == "popularity":
                 summary_parts.append(profile["grade"])
             if profile.get("target_major"):
                 summary_parts.append(f"目标{profile['target_major']}")
-            if profile.get("daily_hours"):
-                summary_parts.append(f"每日{profile['daily_hours']}h")
             if summary_parts:
                 st.caption("当前画像：" + " · ".join(summary_parts))
 
-            # 编辑入口
-            with st.expander("✏️ 编辑画像"):
-                with st.form("recommend_edit_profile"):
-                    col_e1, col_e2 = st.columns(2)
-                    with col_e1:
-                        grade = st.selectbox("年级", ["大一","大二","大三","大四","已毕业"],
-                            index=["大一","大二","大三","大四","已毕业"].index(profile.get("grade")) if profile.get("grade") in ["大一","大二","大三","大四","已毕业"] else 2,
-                            key="edit_grade")
-                        ug_level = st.selectbox("本科院校", ["985","211","双一流","一本","二本","其他"],
-                            index=["985","211","双一流","一本","二本","其他"].index(profile.get("undergraduate_level")) if profile.get("undergraduate_level") in ["985","211","双一流","一本","二本","其他"] else 2,
-                            key="edit_ug")
-                    with col_e2:
-                        daily_hours = st.number_input("每日学习(小时)", 1.0, 16.0, float(profile.get("daily_hours") or 6.0), 0.5, key="edit_daily")
-                        target_major = st.text_input("目标专业", value=profile.get("target_major") or "", key="edit_target")
-                    col_e3, col_e4 = st.columns(2)
-                    with col_e3:
-                        cet4 = st.number_input("CET-4成绩", 0, 710, int(profile.get("cet4_score") or 425), key="edit_cet4")
-                        math_type = st.selectbox("数学考试", ["未确定","数学一","数学二","数学三","不考数学"],
-                            index=["未确定","数学一","数学二","数学三","不考数学"].index(profile.get("math_exam_type")) if profile.get("math_exam_type") in ["未确定","数学一","数学二","数学三","不考数学"] else 0,
-                            key="edit_math")
-                    with col_e4:
-                        cur_weak = _safe_json_loads(profile.get("weak_subjects"), [])
-                        weak_subjects = st.multiselect("弱科", ["数学","英语","政治","专业课"],
-                            default=cur_weak, key="edit_weak")
-                        anxiety = st.slider("焦虑程度", 1, 5, int(profile.get("anxiety_level") or 3), key="edit_anxiety")
-                    if st.form_submit_button("💾 保存修改", use_container_width=True):
-                        for field, val in [
-                            ("grade", grade), ("undergraduate_level", ug_level),
-                            ("target_major", target_major), ("daily_hours", daily_hours),
-                            ("cet4_score", int(cet4)), ("math_exam_type", math_type),
-                            ("weak_subjects", json.dumps(weak_subjects, ensure_ascii=False)),
-                            ("anxiety_level", int(anxiety)),
-                        ]:
-                            if val or isinstance(val, str):
-                                save_profile_field(uid, field, val)
-                        st.rerun()
-
-            # 生成建议
-            if st.button("🔄 生成/刷新个人建议", use_container_width=True, key="gen_rec"):
+        # 生成建议
+        if st.button("🔄 生成/刷新个人建议", use_container_width=True, key="gen_rec"):
+            if not profile:
+                st.info("请先填写个人画像")
+            else:
                 with st.spinner("🤔 正在结合你的个人画像和院校数据生成建议..."):
                     try:
                         rec_text = generate_recommendation(
@@ -2890,442 +3008,13 @@ if st.session_state.page == "popularity":
                     except Exception as e:
                         st.warning(f"⚠️ 建议生成失败：{e}")
 
-            if st.session_state.get("_rec_text"):
-                st.markdown(st.session_state._rec_text)
+        if st.session_state.get("_rec_text"):
+            st.markdown(st.session_state._rec_text)
 
     elif not submitted:
         st.info("👆 输入学校和专业名称，点击「查询热度」开始分析")
 
     st.stop()
-
-# ==================== 学习资料 - 辅助函数 ====================
-
-def _read_reference_docx_structure():
-    """读取 data/reference/ 下的参考 docx 文档，提取段落层级结构作为格式参考"""
-    structure_desc = []
-    for ref_file in sorted(REFERENCE_DIR.glob("*.docx")):
-        try:
-            doc = Document(ref_file)
-            lines = []
-            for p in doc.paragraphs[:60]:  # 只取前60段看清结构
-                style = p.style.name if p.style else "Normal"
-                text = p.text.strip()
-                if text:
-                    lines.append(f"[{style}] {text[:120]}")
-            if lines:
-                structure_desc.append(f"### 《{ref_file.stem}》结构示例：\n" + "\n".join(lines))
-        except Exception:
-            pass
-    return "\n\n".join(structure_desc) if structure_desc else "（暂无参考文档）"
-
-
-def _build_material_prompt(selected_topics, user_requirement):
-    """根据用户选择的知识点和需求，构建发给 AI 的 prompt"""
-    # 读取 corpus 内容
-    corpus_parts = []
-    corpus_files = sorted(DATA_DIR.glob("*.md"))
-    for fp in corpus_files:
-        if selected_topics and fp.stem not in selected_topics:
-            continue
-        try:
-            content = fp.read_text(encoding="utf-8")[:1500]  # 每个知识点最多取1500字
-            corpus_parts.append(f"### {fp.stem}\n{content}")
-        except Exception:
-            pass
-
-    corpus_text = "\n\n".join(corpus_parts) if corpus_parts else "（使用全部知识点）"
-
-    # 读取参考 docx 格式
-    ref_structure = _read_reference_docx_structure()
-
-    # 读取 LaTeX 格式规范 skill
-    latex_skill_path = Path("skills/latex-formatter/SKILL.md")
-    latex_rules = ""
-    if latex_skill_path.exists():
-        latex_rules = latex_skill_path.read_text(encoding="utf-8")
-    else:
-        # 兜底：内嵌最基础的 LaTeX 规则
-        latex_rules = """## LaTeX 格式强制规则
-- 行内公式只用 $...$，禁止 \\(...\\)
-- 独立公式只用 $$...$$，禁止 \\[...\\]
-- \\\\ 只能出现在 $$...$$ 内
-- 禁止在 $...$ 外用 \\frac、\\lim 等 LaTeX 命令"""
-
-    prompt = f"""你是考研数学辅导专家。请根据提供的知识点内容，仿照参考文档的格式，生成一份考研数学学习/习题资料。
-
-## 格式要求（参考 data/reference/ 下的文档结构）
-
-参考文档采用以下层级：
-{ref_structure}
-
-请你用 Markdown 格式输出，层级规则：
-- # 一级标题：章标题（如 # 第一章 凑元换元法）
-- ## 二级标题：节标题（如 ## 含参变量积分）
-- ### 三级标题：题号/子标题（如 ### 第 1 题）
-- 每个题目或知识点包含：题目/概念 → 分析/提示 → 解答/推导 → 方法总结
-
-{latex_rules}
-
-## 知识点参考内容
-
-{corpus_text}
-
-## 用户需求
-
-{user_requirement}
-
-请直接输出生成的内容，无需额外说明。"""
-
-    return prompt
-
-
-def _generate_material(prompt):
-    """调用 AI 生成资料内容，返回 (思考过程, 最终结果)"""
-    data = {
-        "model": "mimo-v2.5",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 4096,
-        "temperature": 0.3,
-    }
-    try:
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
-        reasoning = msg.get("reasoning_content") or ""
-        content = msg.get("content") or ""
-        # 如果模型不区分思考/结果，则全部作为结果
-        if not content and reasoning:
-            content = reasoning
-            reasoning = ""
-        return reasoning, content
-    except Exception as e:
-        raise RuntimeError(f"AI 调用失败: {e}")
-
-
-def _latex_to_omml(latex_str):
-    """将单个 LaTeX 公式字符串转换为 OMML XML 元素（用于 docx 嵌入）"""
-    from lxml import etree
-    from sympy.parsing.latex import parse_latex
-    from sympy.printing.mathml import mathml
-
-    try:
-        expr = parse_latex(latex_str)
-        mml_str = mathml(expr)
-        mml = etree.fromstring(mml_str.encode("utf-8"))
-    except Exception:
-        return None
-
-    MATH_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
-    M = "{%s}" % MATH_NS
-
-    def _m(tag):
-        return etree.QName(MATH_NS, tag)
-
-    def _r(text):
-        """Create m:r element with m:t text"""
-        r = etree.Element(_m("r"))
-        t = etree.SubElement(r, _m("t"))
-        t.text = str(text)
-        t.set("xml:space", "preserve")
-        return r
-
-    def _convert(elem):
-        """Recursively convert MathML element to OMML"""
-        tag = etree.QName(elem.tag).localname
-
-        if tag == "ci":
-            return _r(elem.text or "")
-        elif tag == "cn":
-            return _r(elem.text or "")
-
-        elif tag == "apply":
-            children = list(elem)
-            if not children:
-                return None
-            op_elem = children[0]
-            op_tag = etree.QName(op_elem.tag).localname
-            args = children[1:]
-
-            if op_tag == "divide":
-                # m:f
-                f = etree.Element(_m("f"))
-                if not args:
-                    return None
-                num_elem = args[0]
-                num = etree.SubElement(f, _m("num"))
-                num_conv = _convert(num_elem)
-                if num_conv is not None:
-                    num.append(num_conv)
-                den_elem = args[1] if len(args) > 1 else None
-                if den_elem is not None:
-                    den = etree.SubElement(f, _m("den"))
-                    den_conv = _convert(den_elem)
-                    if den_conv is not None:
-                        den.append(den_conv)
-                return f
-
-            elif op_tag == "power":
-                # m:sSup
-                sSup = etree.Element(_m("sSup"))
-                base_elem = etree.SubElement(sSup, _m("e"))
-                base_conv = _convert(args[0]) if args else None
-                if base_conv is not None:
-                    base_elem.append(base_conv)
-                sup_elem = etree.SubElement(sSup, _m("sup"))
-                sup_conv = _convert(args[1]) if len(args) > 1 else None
-                if sup_conv is not None:
-                    sup_elem.append(sup_conv)
-                return sSup
-
-            elif op_tag == "root":
-                # m:rad (degree is first arg if present, otherwise default sqrt)
-                rad = etree.Element(_m("rad"))
-                rad_elem = etree.SubElement(rad, _m("e"))
-                # Check if first arg is a <cn>2</cn> (square root)
-                if len(args) == 2:
-                    deg = etree.SubElement(rad, _m("deg"))
-                    deg_conv = _convert(args[0])
-                    if deg_conv is not None:
-                        deg.append(deg_conv)
-                    content_conv = _convert(args[1])
-                    if content_conv is not None:
-                        rad_elem.append(content_conv)
-                else:
-                    content_conv = _convert(args[0]) if args else None
-                    if content_conv is not None:
-                        rad_elem.append(content_conv)
-                return rad
-
-            elif op_tag == "minus" and len(args) == 1:
-                # Unary minus
-                r = etree.Element(_m("r"))
-                t = etree.SubElement(r, _m("t"))
-                t.text = "-"
-                t.set("xml:space", "preserve")
-                inner = _convert(args[0])
-                if inner is not None:
-                    # Return a simple concatenation for unary minus
-                    d = etree.Element(_m("d"))
-                    d.append(r)
-                    d.append(inner)
-                    return d
-                return r
-
-            elif op_tag in ("plus", "minus", "times"):
-                # Binary operators
-                op_map = {"plus": "+", "minus": "-", "times": "×"}
-                op_char = op_map.get(op_tag, op_tag)
-                d = etree.Element(_m("d"))
-                if not args:
-                    return None
-                for i, a in enumerate(args):
-                    if i > 0:
-                        op_r = _r(op_char)
-                        d.append(op_r)
-                    conv = _convert(a)
-                    if conv is not None:
-                        d.append(conv)
-                return d
-
-            elif op_tag == "int":
-                # m:nary with ∫
-                nary = etree.Element(_m("nary"))
-                chr_elem = etree.SubElement(nary, _m("chr"))
-                chr_elem.set(_m("val"), "∫")
-                # Find bvar, lowlimit, uplimit, and the integrand
-                integrand = None
-                for a in args:
-                    at = etree.QName(a.tag).localname
-                    if at == "bvar":
-                        continue  # bvar is just declaration
-                    elif at == "lowlimit":
-                        sub_e = etree.SubElement(nary, _m("sub"))
-                        sub_c = _convert(a[0]) if len(a) else None
-                        if sub_c is not None:
-                            sub_e.append(sub_c)
-                    elif at == "uplimit":
-                        sup_e = etree.SubElement(nary, _m("sup"))
-                        sup_c = _convert(a[0]) if len(a) else None
-                        if sup_c is not None:
-                            sup_e.append(sup_c)
-                    else:
-                        integrand = a
-                if integrand is not None:
-                    e = etree.SubElement(nary, _m("e"))
-                    ec = _convert(integrand)
-                    if ec is not None:
-                        e.append(ec)
-                return nary
-
-            elif op_tag == "sum":
-                nary = etree.Element(_m("nary"))
-                chr_elem = etree.SubElement(nary, _m("chr"))
-                chr_elem.set(_m("val"), "∑")
-                for a in args:
-                    at = etree.QName(a.tag).localname
-                    if at == "bvar":
-                        continue
-                    elif at == "lowlimit":
-                        sub_e = etree.SubElement(nary, _m("sub"))
-                        sub_c = _convert(a[0]) if len(a) else None
-                        if sub_c is not None:
-                            sub_e.append(sub_c)
-                    elif at == "uplimit":
-                        sup_e = etree.SubElement(nary, _m("sup"))
-                        sup_c = _convert(a[0]) if len(a) else None
-                        if sup_c is not None:
-                            sup_e.append(sup_c)
-                    else:
-                        e = etree.SubElement(nary, _m("e"))
-                        ec = _convert(a)
-                        if ec is not None:
-                            e.append(ec)
-                return nary
-
-            elif op_tag in ("sin", "cos", "tan", "ln", "log", "exp", "lim", "cot", "sec", "csc"):
-                func = etree.Element(_m("func"))
-                fName = etree.SubElement(func, _m("fName"))
-                fn_r = _r(op_tag)
-                fName.append(fn_r)
-                if args:
-                    fe = etree.SubElement(func, _m("e"))
-                    fc = _convert(args[0])
-                    if fc is not None:
-                        fe.append(fc)
-                return func
-
-            elif op_tag == "eq":
-                # Equality: a = b
-                d = etree.Element(_m("d"))
-                if not args:
-                    return None
-                for i, a in enumerate(args):
-                    if i > 0:
-                        d.append(_r("="))
-                    conv = _convert(a)
-                    if conv is not None:
-                        d.append(conv)
-                return d
-
-            elif op_tag == "f":  # function application like f(x)
-                if args:
-                    return _convert(args[0])
-                return None
-
-            else:
-                # Fallback: convert all children and join
-                d = etree.Element(_m("d"))
-                for a in args:
-                    conv = _convert(a)
-                    if conv is not None:
-                        d.append(conv)
-                return d
-
-        else:
-            return None
-
-    try:
-        omml = _convert(mml)
-    except Exception:
-        return None
-
-    if omml is None:
-        return None
-    return omml
-
-
-def _ai_output_to_docx_bytes(ai_text):
-    """将 AI 生成的 Markdown 转 docx，LaTeX 公式转 OMML 让 Word 原生渲染"""
-    from lxml import etree
-
-    text_clean = _fix_latex(ai_text)
-
-    doc = Document()
-    style = doc.styles["Normal"]
-    font = style.font
-    font.name = "宋体"
-    font.size = Pt(12)
-
-    MATH_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
-
-    # 先合并 $$...$$ 多行块，再按行处理
-    lines = []
-    in_math = False
-    math_buf = []
-    for line in text_clean.split("\n"):
-        s = line.strip()
-        if s.startswith("$$") and not in_math:
-            in_math = True
-            math_buf = [s]
-        elif in_math:
-            math_buf.append(s)
-            if s.endswith("$$"):
-                lines.append(("math_block", "\n".join(math_buf)))
-                in_math = False
-                math_buf = []
-        else:
-            lines.append(("text", s))
-    if in_math and math_buf:
-        lines.append(("math_block", "\n".join(math_buf)))
-
-    for kind, text in lines:
-        if kind == "math_block":
-            # 显示公式块，居中
-            latex_inner = text.strip()
-            if latex_inner.startswith("$$"):
-                latex_inner = latex_inner[2:]
-            if latex_inner.endswith("$$"):
-                latex_inner = latex_inner[:-2]
-            latex_inner = latex_inner.strip()
-
-            p = doc.add_paragraph()
-            p.alignment = 1  # 居中
-            omml = _latex_to_omml(latex_inner)
-            if omml is not None:
-                run = p.add_run(" ")
-                run._element.append(omml)
-            else:
-                run = p.add_run(text)
-                run.font.size = Pt(11)
-
-        elif not text:
-            continue
-        elif text.startswith("### "):
-            doc.add_paragraph(text[4:], style="Heading 3")
-        elif text.startswith("## "):
-            doc.add_paragraph(text[3:], style="Heading 2")
-        elif text.startswith("# "):
-            doc.add_paragraph(text[2:], style="Heading 1")
-        else:
-            # 普通段落，处理内联 $...$ 公式
-            parts = re.split(r"(\$[^$]+\$)", text)
-            if len(parts) == 1:
-                doc.add_paragraph(text)
-            else:
-                p = doc.add_paragraph()
-                for part in parts:
-                    if part.startswith("$") and part.endswith("$"):
-                        inline_latex = part[1:-1].strip()
-                        omml = _latex_to_omml(inline_latex)
-                        if omml is not None:
-                            run = p.add_run(" ")
-                            run._element.append(omml)
-                        else:
-                            run = p.add_run(part)
-                            run.font.size = Pt(11)
-                    else:
-                        p.add_run(part)
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
-
 
 # ==================== 学习资料 ====================
 if st.session_state.page == "material":
@@ -3380,7 +3069,7 @@ if st.session_state.page == "material":
                     prompt = _build_material_prompt(selected_topics, user_requirement)
                     try:
                         reasoning, result_text = _generate_material(prompt)
-                        docx_bytes = _ai_output_to_docx_bytes(result_text)
+                        docx_bytes = _ai_output_to_docx_via_pandoc(result_text)
 
                         # 简短展示思考过程
                         if reasoning:
@@ -3413,9 +3102,77 @@ if st.session_state.page == "material":
 
     # ── 英语资料 ──
     with tab_english:
-        st.info("🚧 英语资料模块即将上线，敬请期待~")
+        eng_categories = [
+            "语法专题", "阅读技巧", "写作模板", "翻译技巧",
+            "完形填空", "新题型", "单词归类总结"
+        ]
+        selected_eng_category = st.selectbox(
+            "选择知识点分类",
+            eng_categories,
+            key="eng_category"
+        )
+
+        vocab_category = ""
+        if selected_eng_category == "单词归类总结":
+            vocab_types = ["按主题分类", "按词性分类", "按难度分类", "按真题频率分类"]
+            vocab_category = st.selectbox(
+                "选择分类方式",
+                vocab_types,
+                key="vocab_category"
+            )
+
+        eng_requirement = st.text_area(
+            "描述你想要的资料",
+            height=100,
+            placeholder="例如：帮我整理定语从句的笔记，要有例句和真题",
+            key="eng_requirement"
+        )
+
+        eng_col1, eng_col2 = st.columns([1, 3])
+        with eng_col1:
+            eng_generate_btn = st.button("🚀 生成资料", type="primary", use_container_width=True, key="eng_gen")
+        with eng_col2:
+            if not eng_requirement.strip():
+                st.caption("💡 在上方输入框中描述你想要的资料类型，然后点击生成")
+
+        if eng_generate_btn:
+            if not eng_requirement.strip():
+                st.warning("请先输入你对资料的需求描述")
+            elif not API_KEY:
+                st.error("未配置 AI API Key，无法生成")
+            else:
+                with st.spinner("AI 正在生成资料，请稍候..."):
+                    prompt = _build_english_material_prompt(
+                        selected_eng_category, eng_requirement, vocab_category
+                    )
+                    try:
+                        reasoning, result_text = _generate_material(prompt)
+                        docx_bytes = _ai_output_to_docx_via_pandoc(result_text)
+
+                        if reasoning:
+                            reasoning_lines = [l for l in reasoning.split("\n") if l.strip()]
+                            brief = reasoning_lines[:3] if len(reasoning_lines) > 3 else reasoning_lines
+                            with st.expander(f"💭 AI 思考过程（共 {len(reasoning)} 字）"):
+                                st.caption("\n".join(brief))
+                                if len(reasoning_lines) > 3:
+                                    st.caption(f"...（共 {len(reasoning_lines)} 行思考内容）")
+
+                        file_name = f"考研英语_{selected_eng_category}.docx"
+
+                        st.success(f"✅ 生成完成！共 {len(result_text)} 字")
+                        st.download_button(
+                            label="📥 下载 docx",
+                            data=docx_bytes,
+                            file_name=file_name,
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key="eng_dl",
+                            type="primary",
+                        )
+                    except Exception as e:
+                        st.error(f"生成失败: {e}")
 
     st.stop()
+
 
 # ==================== 提建议 ====================
 if st.session_state.page == "suggest":
@@ -4537,34 +4294,182 @@ with tab1:
             kid = r['id']
             with st.expander(f"📄 {_clean_knowledge_name(kid)} ({r['score']})"):
                 st.markdown(r['text'][:1500])
-                if st.button("🎲 出题", key=f"kb_s_{kid}"):
-                    st.progress(0, text="生成中...")
-                    st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
-                    st.progress(100, text="✅ 完成")
-                    st.session_state._kb_qid = kid
-                    st.rerun()
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("🎲 出题", key=f"kb_s_{kid}", use_container_width=True):
+                        st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
+                        st.session_state._kb_qid = kid
+                        st.rerun()
+                with c2:
+                    if st.button("🎓 概念自测", key=f"kb_s_cp_{kid}", use_container_width=True):
+                        st.session_state._kb_concept_qid = kid
+                        st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
-                    quiz = st.session_state.pop("_kb_quiz", None)
-                    st.session_state.pop("_kb_qid", None)
-                    if quiz and quiz.get("success"):
+                    quiz = st.session_state.get("_kb_quiz")
+                    if st.session_state.get("_kb_result"):
+                        st.markdown("### 📊 评分结果")
+                        st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_result))))
+                        if st.button("✅ 关闭", key=f"kb_s_close_res_{kid}", use_container_width=True):
+                            st.session_state.pop("_kb_result", None)
+                            st.session_state.pop("_kb_qid", None)
+                            st.rerun()
+                    elif quiz and quiz.get("success"):
                         render_qa_cards(quiz['questions'], columns=1, typing=True)
+                        ans = st.text_area("你的解法", key=f"kb_s_ans_{kid}", height=150,
+                            placeholder="写下你的解题思路和答案...")
+                        if st.button("📝 提交自测", key=f"kb_s_sub_{kid}", use_container_width=True):
+                            if ans.strip():
+                                with st.spinner("AI 正在评分..."):
+                                    try:
+                                        prompt = PROBLEM_EVAL_PROMPT.format(question=quiz['questions'], answer=ans)
+                                        result = call_llm_api(prompt, model="mimo-v2.5")
+                                        total = 0; sc = 0; se = 0; sa = 0
+                                        m = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)
+                                        if m: total = int(m.group(1))
+                                        m = re.search(r'\[解题正确性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sc = int(m.group(1))
+                                        m = re.search(r'\[解题过程\]\s*(\d+)/(\d+)分', result)
+                                        if m: se = int(m.group(1))
+                                        m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sa = int(m.group(1))
+                                        q_raw = quiz['questions']
+                                        qm = re.search(r'Q:\s*(.+)', q_raw)
+                                        display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
+                                        save_feynman_record(st.session_state.get("user_id"), "problem", display_q, ans, result, sc, se, sa, total)
+                                        st.session_state._kb_result = result
+                                        st.session_state._kb_quiz = None
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"评价失败: {e}")
+                            else:
+                                st.warning("请输入你的解法")
+                if st.session_state.get("_kb_concept_qid") == kid:
+                    concept_quiz = st.session_state.get("_kb_concept_quiz")
+                    if st.session_state.get("_kb_concept_result"):
+                        st.markdown("### 📊 评分结果")
+                        st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_concept_result))))
+                        if st.button("✅ 关闭", key=f"kb_s_close_cres_{kid}", use_container_width=True):
+                            st.session_state.pop("_kb_concept_result", None)
+                            st.session_state.pop("_kb_concept_qid", None)
+                            st.rerun()
+                    elif not st.session_state.get("_kb_concept_result"):
+                        concept_quiz_text = f"概念自测：「{_clean_knowledge_name(kid)}」"
+                        st.info(f"📝 {concept_quiz_text}")
+                        ans = st.text_area("你的回答", key=f"kb_s_ans_{kid}", height=120)
+                        if st.button("📝 提交自测", key=f"kb_s_cp_sub_{kid}", use_container_width=True):
+                            if ans.strip():
+                                with st.spinner("AI 正在评分..."):
+                                    try:
+                                        prompt = CONCEPT_EVAL_PROMPT.format(question=concept_quiz_text, answer=ans)
+                                        result = call_llm_api(prompt, model="mimo-v2.5")
+                                        total = 0; sc = 0; se = 0; sa = 0
+                                        m = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)
+                                        if m: total = int(m.group(1))
+                                        m = re.search(r'\[概念理解\]\s*(\d+)/(\d+)分', result)
+                                        if m: sc = int(m.group(1))
+                                        m = re.search(r'\[表达能力\]\s*(\d+)/(\d+)分', result)
+                                        if m: se = int(m.group(1))
+                                        m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sa = int(m.group(1))
+                                        save_feynman_record(st.session_state.get("user_id"), "concept", concept_quiz, ans, result, sc, se, sa, total)
+                                        st.session_state._kb_concept_result = result
+                                        st.session_state._kb_concept_quiz = None
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"评价失败: {e}")
+                            else:
+                                st.warning("请输入你的回答")
 
     else:
         for doc in filtered_corpus:
             kid = doc['id']
             with st.expander(f"📄 {_clean_knowledge_name(kid)}"):
                 st.markdown(doc['text'][:1500])
-                if st.button("🎲 出题", key=f"kb_d_{kid}"):
-                    st.progress(0, text="生成中...")
-                    st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
-                    st.progress(100, text="✅ 完成")
-                    st.session_state._kb_qid = kid
-                    st.rerun()
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("🎲 出题", key=f"kb_d_{kid}", use_container_width=True):
+                        st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
+                        st.session_state._kb_qid = kid
+                        st.rerun()
+                with c2:
+                    if st.button("🎓 概念自测", key=f"kb_d_cp_{kid}", use_container_width=True):
+                        st.session_state._kb_concept_qid = kid
+                        st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
-                    quiz = st.session_state.pop("_kb_quiz", None)
-                    st.session_state.pop("_kb_qid", None)
-                    if quiz and quiz.get("success"):
+                    quiz = st.session_state.get("_kb_quiz")
+                    if st.session_state.get("_kb_result"):
+                        st.markdown("### 📊 评分结果")
+                        st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_result))))
+                        if st.button("✅ 关闭", key=f"kb_d_close_res_{kid}", use_container_width=True):
+                            st.session_state.pop("_kb_result", None)
+                            st.session_state.pop("_kb_qid", None)
+                            st.rerun()
+                    elif quiz and quiz.get("success"):
                         render_qa_cards(quiz['questions'], columns=1, typing=True)
+                        ans = st.text_area("你的解法", key=f"kb_d_ans_{kid}", height=150,
+                            placeholder="写下你的解题思路和答案...")
+                        if st.button("📝 提交自测", key=f"kb_d_sub_{kid}", use_container_width=True):
+                            if ans.strip():
+                                with st.spinner("AI 正在评分..."):
+                                    try:
+                                        prompt = PROBLEM_EVAL_PROMPT.format(question=quiz['questions'], answer=ans)
+                                        result = call_llm_api(prompt, model="mimo-v2.5")
+                                        total = 0; sc = 0; se = 0; sa = 0
+                                        m = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)
+                                        if m: total = int(m.group(1))
+                                        m = re.search(r'\[解题正确性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sc = int(m.group(1))
+                                        m = re.search(r'\[解题过程\]\s*(\d+)/(\d+)分', result)
+                                        if m: se = int(m.group(1))
+                                        m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sa = int(m.group(1))
+                                        q_raw = quiz['questions']
+                                        qm = re.search(r'Q:\s*(.+)', q_raw)
+                                        display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
+                                        save_feynman_record(st.session_state.get("user_id"), "problem", display_q, ans, result, sc, se, sa, total)
+                                        st.session_state._kb_result = result
+                                        st.session_state._kb_quiz = None
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"评价失败: {e}")
+                            else:
+                                st.warning("请输入你的解法")
+                if st.session_state.get("_kb_concept_qid") == kid:
+                    concept_quiz = st.session_state.get("_kb_concept_quiz")
+                    if st.session_state.get("_kb_concept_result"):
+                        st.markdown("### 📊 评分结果")
+                        st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_concept_result))))
+                        if st.button("✅ 关闭", key=f"kb_d_close_cres_{kid}", use_container_width=True):
+                            st.session_state.pop("_kb_concept_result", None)
+                            st.session_state.pop("_kb_concept_qid", None)
+                            st.rerun()
+                    elif not st.session_state.get("_kb_concept_result"):
+                        concept_quiz_text = f"概念自测：「{_clean_knowledge_name(kid)}」"
+                        st.info(f"📝 {concept_quiz_text}")
+                        ans = st.text_area("你的回答", key=f"kb_d_cp_ans_{kid}", height=120)
+                        if st.button("📝 提交自测", key=f"kb_d_cp_sub_{kid}", use_container_width=True):
+                            if ans.strip():
+                                with st.spinner("AI 正在评分..."):
+                                    try:
+                                        prompt = CONCEPT_EVAL_PROMPT.format(question=concept_quiz_text, answer=ans)
+                                        result = call_llm_api(prompt, model="mimo-v2.5")
+                                        total = 0; sc = 0; se = 0; sa = 0
+                                        m = re.search(r'\[总分\]\s*(\d+)/(\d+)分', result)
+                                        if m: total = int(m.group(1))
+                                        m = re.search(r'\[概念理解\]\s*(\d+)/(\d+)分', result)
+                                        if m: sc = int(m.group(1))
+                                        m = re.search(r'\[表达能力\]\s*(\d+)/(\d+)分', result)
+                                        if m: se = int(m.group(1))
+                                        m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
+                                        if m: sa = int(m.group(1))
+                                        save_feynman_record(st.session_state.get("user_id"), "concept", concept_quiz, ans, result, sc, se, sa, total)
+                                        st.session_state._kb_concept_result = result
+                                        st.session_state._kb_concept_quiz = None
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"评价失败: {e}")
+                            else:
+                                st.warning("请输入你的回答")
 
 with tab2:
     st.subheader("🎯 复习挑战")
@@ -4720,8 +4625,9 @@ with tab4:
             mode_label = "概念" if record["mode"] == "concept" else "解题"
             score = record["total_score"]
             time_str = str(record["created_at"])[:16]
-            with st.expander(f"[{mode_label}] {record['question_text'][:40]}... | {score}分 | {time_str}"):
-                st.markdown(f"**题目**: {record['question_text']}")
+            q_text = record['question_text'] or '(概念自测)'
+            with st.expander(f"[{mode_label}] {q_text[:40]}... | {score}分 | {time_str}"):
+                st.markdown(f"**题目**: {q_text}")
                 st.markdown(f"**你的答案**: {record['user_answer']}")
                 st.markdown("---")
                 st.markdown(record["ai_evaluation"])

@@ -1,6 +1,7 @@
 {
   "schools": {
-    "华东师范大学": "10269"
+    "华东师范大学": "10269",
+    "江西理工大学": "10407"
   },
   "majors": {
     "10269": {
@@ -2574,6 +2575,3533 @@
           "UniversityName": "华东师范大学",
           "UniversityPartition": "A",
           "UniversityProvince": "上海"
+        }
+      ]
+    },
+    "10407": {
+      "timestamp": 1781197361195,
+      "list": [
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "014",
+          "CollegeName": "法学院",
+          "MajorCode": "030103",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "宪法学与行政法学",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "016",
+          "CollegeName": "外国语学院",
+          "MajorCode": "045300",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "国际中文教育",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "016",
+          "CollegeName": "外国语学院",
+          "MajorCode": "055100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "翻译",
+          "MajorPlannedEnrollment": "27",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "013",
+          "CollegeName": "建筑与设计学院",
+          "MajorCode": "135700",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "设计",
+          "MajorPlannedEnrollment": "8",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "012",
+          "CollegeName": "应急管理与安全工程学院",
+          "MajorCode": "0301J1",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "法行政学",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "070501",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "自然地理学",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "014",
+          "CollegeName": "法学院",
+          "MajorCode": "030102",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "法律史",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "120200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "工商管理学",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "014",
+          "CollegeName": "法学院",
+          "MajorCode": "030104",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "刑法学",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "014",
+          "CollegeName": "法学院",
+          "MajorCode": "030108",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "环境与资源保护法学",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "014",
+          "CollegeName": "法学院",
+          "MajorCode": "030105",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "民商法学",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "008",
+          "CollegeName": "电气工程与自动化学院",
+          "MajorCode": "085403",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "集成电路工程",
+          "MajorPlannedEnrollment": "11",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "017",
+          "CollegeName": "体育与艺术学院",
+          "MajorCode": "045200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "体育",
+          "MajorPlannedEnrollment": "9",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "081901",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "采矿工程",
+          "MajorPlannedEnrollment": "16",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "081403",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "市政工程",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "014",
+          "CollegeName": "法学院",
+          "MajorCode": "035102",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "法律（法学）",
+          "MajorPlannedEnrollment": "13",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "015",
+          "CollegeName": "马克思主义学院",
+          "MajorCode": "030500",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "马克思主义理论",
+          "MajorPlannedEnrollment": "29",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "014",
+          "CollegeName": "法学院",
+          "MajorCode": "035101",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "法律（非法学）",
+          "MajorPlannedEnrollment": "12",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "085703",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "地质工程",
+          "MajorPlannedEnrollment": "8",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "013",
+          "CollegeName": "建筑与设计学院",
+          "MajorCode": "085507",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "工业设计工程",
+          "MajorPlannedEnrollment": "17",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "021",
+          "CollegeName": "国际创新研究院（南昌）",
+          "MajorCode": "085501",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "机械工程",
+          "MajorPlannedEnrollment": "8",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "085906",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "人工环境工程（含供热、通风及空调等）",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "012",
+          "CollegeName": "应急管理与安全工程学院",
+          "MajorCode": "0837J1",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "公共安全与应急管理",
+          "MajorPlannedEnrollment": "6",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "085901",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "土木工程",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "008",
+          "CollegeName": "电气工程与自动化学院",
+          "MajorCode": "085410",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "人工智能",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "081404",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "供热、供燃气、通风及空调工程",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "070502",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "人文地理学",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "008",
+          "CollegeName": "电气工程与自动化学院",
+          "MajorCode": "081100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "控制科学与工程",
+          "MajorPlannedEnrollment": "11",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "009",
+          "CollegeName": "信息工程学院",
+          "MajorCode": "085412",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "网络与信息安全",
+          "MajorPlannedEnrollment": "13",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "010",
+          "CollegeName": "理学院",
+          "MajorCode": "085408",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "光电信息工程",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "085701",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "环境工程",
+          "MajorPlannedEnrollment": "16",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "081401",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "岩土工程",
+          "MajorPlannedEnrollment": "6",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "009",
+          "CollegeName": "信息工程学院",
+          "MajorCode": "085410",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "人工智能",
+          "MajorPlannedEnrollment": "22",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "007",
+          "CollegeName": "机电工程学院",
+          "MajorCode": "085509",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "智能制造技术",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "083000",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "环境科学与工程",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "007",
+          "CollegeName": "机电工程学院",
+          "MajorCode": "085502",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "车辆工程",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "012",
+          "CollegeName": "应急管理与安全工程学院",
+          "MajorCode": "085702",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "安全工程",
+          "MajorPlannedEnrollment": "24",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "0819J1",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "矿业贸易与投资",
+          "MajorPlannedEnrollment": "8",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "018",
+          "CollegeName": "能源与机械工程学院（南昌）",
+          "MajorCode": "085601",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料工程",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "024",
+          "CollegeName": "卓越工程师学院",
+          "MajorCode": "085705",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "矿业工程",
+          "MajorPlannedEnrollment": "8",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "018",
+          "CollegeName": "能源与机械工程学院（南昌）",
+          "MajorCode": "085501",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "机械工程",
+          "MajorPlannedEnrollment": "12",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "004",
+          "CollegeName": "化学化工学院",
+          "MajorCode": "070300",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "化学",
+          "MajorPlannedEnrollment": "26",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "012",
+          "CollegeName": "应急管理与安全工程学院",
+          "MajorCode": "083700",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "安全科学与工程",
+          "MajorPlannedEnrollment": "18",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "004",
+          "CollegeName": "化学化工学院",
+          "MajorCode": "081700",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "化学工程与技术",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "009",
+          "CollegeName": "信息工程学院",
+          "MajorCode": "085402",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "通信工程（含宽带网络、移动通信等）",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "070503",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "地图学与地理信息系统",
+          "MajorPlannedEnrollment": "17",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "010",
+          "CollegeName": "理学院",
+          "MajorCode": "080900",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "电子科学与技术",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "010",
+          "CollegeName": "理学院",
+          "MajorCode": "085402",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "通信工程（含宽带网络、移动通信等）",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "008",
+          "CollegeName": "电气工程与自动化学院",
+          "MajorCode": "080800",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "电气工程",
+          "MajorPlannedEnrollment": "17",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "085905",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "市政工程（含给排水等）",
+          "MajorPlannedEnrollment": "13",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "085905",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "市政工程（含给排水等）",
+          "MajorPlannedEnrollment": "13",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "010",
+          "CollegeName": "理学院",
+          "MajorCode": "085401",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "新一代电子信息技术（含量子技术等）",
+          "MajorPlannedEnrollment": "24",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "010",
+          "CollegeName": "理学院",
+          "MajorCode": "070100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "数学",
+          "MajorPlannedEnrollment": "13",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "001",
+          "CollegeName": "稀土学院",
+          "MajorCode": "080500",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料科学与工程",
+          "MajorPlannedEnrollment": "15",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "001",
+          "CollegeName": "稀土学院",
+          "MajorCode": "0806Z1",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "稀土工程",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "085901",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "土木工程",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "009",
+          "CollegeName": "信息工程学院",
+          "MajorCode": "085401",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "新一代电子信息技术（含量子技术等）",
+          "MajorPlannedEnrollment": "9",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "019",
+          "CollegeName": "软件工程学院（南昌）",
+          "MajorCode": "145200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "密码",
+          "MajorPlannedEnrollment": "19",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "007",
+          "CollegeName": "机电工程学院",
+          "MajorCode": "080200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "机械工程",
+          "MajorPlannedEnrollment": "15",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "008",
+          "CollegeName": "电气工程与自动化学院",
+          "MajorCode": "085406",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "控制工程",
+          "MajorPlannedEnrollment": "43",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "085901",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "土木工程",
+          "MajorPlannedEnrollment": "35",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "009",
+          "CollegeName": "信息工程学院",
+          "MajorCode": "085408",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "光电信息工程",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "085704",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "测绘工程",
+          "MajorPlannedEnrollment": "24",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "007",
+          "CollegeName": "机电工程学院",
+          "MajorCode": "085501",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "机械工程",
+          "MajorPlannedEnrollment": "61",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "081902",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "矿物加工工程",
+          "MajorPlannedEnrollment": "17",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "002",
+          "CollegeName": "材料科学与工程学院",
+          "MajorCode": "085601",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料工程",
+          "MajorPlannedEnrollment": "87",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "008",
+          "CollegeName": "电气工程与自动化学院",
+          "MajorCode": "085801",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "电气工程",
+          "MajorPlannedEnrollment": "27",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "022",
+          "CollegeName": "江西先进铜产业研究院",
+          "MajorCode": "080500",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料科学与工程",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "003",
+          "CollegeName": "冶金工程学院",
+          "MajorCode": "085603",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "冶金工程",
+          "MajorPlannedEnrollment": "41",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "022",
+          "CollegeName": "江西先进铜产业研究院",
+          "MajorCode": "085601",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料工程",
+          "MajorPlannedEnrollment": "14",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "085705",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "矿业工程",
+          "MajorPlannedEnrollment": "46",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "010",
+          "CollegeName": "理学院",
+          "MajorCode": "085404",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "计算机技术",
+          "MajorPlannedEnrollment": "9",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "021",
+          "CollegeName": "国际创新研究院（南昌）",
+          "MajorCode": "085603",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "冶金工程",
+          "MajorPlannedEnrollment": "12",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "009",
+          "CollegeName": "信息工程学院",
+          "MajorCode": "085404",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "计算机技术",
+          "MajorPlannedEnrollment": "44",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "004",
+          "CollegeName": "化学化工学院",
+          "MajorCode": "085602",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "化学工程",
+          "MajorPlannedEnrollment": "35",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "007",
+          "CollegeName": "机电工程学院",
+          "MajorCode": "085406",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "控制工程",
+          "MajorPlannedEnrollment": "8",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "019",
+          "CollegeName": "软件工程学院（南昌）",
+          "MajorCode": "085404",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "计算机技术",
+          "MajorPlannedEnrollment": "28",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "003",
+          "CollegeName": "冶金工程学院",
+          "MajorCode": "080600",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "冶金工程",
+          "MajorPlannedEnrollment": "25",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "125603",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "工业工程与管理",
+          "MajorPlannedEnrollment": "15",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "125300",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "会计",
+          "MajorPlannedEnrollment": "23",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "020",
+          "CollegeName": "商学院（南昌）",
+          "MajorCode": "125604",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "物流工程与管理",
+          "MajorPlannedEnrollment": "17",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "018",
+          "CollegeName": "能源与机械工程学院（南昌）",
+          "MajorCode": "080500",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料科学与工程",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "021",
+          "CollegeName": "国际创新研究院（南昌）",
+          "MajorCode": "085602",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "化学工程",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "003",
+          "CollegeName": "冶金工程学院",
+          "MajorCode": "0806Z1",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "稀土工程",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            },
+            {
+              "AdmitYear": "2020"
+            }
+          ],
+          "CollegeCode": "009",
+          "CollegeName": "信息工程学院",
+          "MajorCode": "081000",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "信息与通信工程",
+          "MajorPlannedEnrollment": "12",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "024",
+          "CollegeName": "卓越工程师学院",
+          "MajorCode": "085602",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "化学工程",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "025100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "金融",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "081402",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "结构工程",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "021",
+          "CollegeName": "国际创新研究院（南昌）",
+          "MajorCode": "077602",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "环境工程",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "085702",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "安全工程",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085602",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "化学工程",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "020",
+          "CollegeName": "商学院（南昌）",
+          "MajorCode": "025100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "金融",
+          "MajorPlannedEnrollment": "9",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "022",
+          "CollegeName": "江西先进铜产业研究院",
+          "MajorCode": "085603",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "冶金工程",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "021",
+          "CollegeName": "国际创新研究院（南昌）",
+          "MajorCode": "080500",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料科学与工程",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "018",
+          "CollegeName": "能源与机械工程学院（南昌）",
+          "MajorCode": "085808",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "储能技术",
+          "MajorPlannedEnrollment": "15",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "021",
+          "CollegeName": "国际创新研究院（南昌）",
+          "MajorCode": "085601",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料工程",
+          "MajorPlannedEnrollment": "17",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "003",
+          "CollegeName": "冶金工程学院",
+          "MajorCode": "085808",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "储能技术",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "020",
+          "CollegeName": "商学院（南昌）",
+          "MajorCode": "020200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "应用经济学",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "008",
+          "CollegeName": "电气工程与自动化学院",
+          "MajorCode": "080900",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "电子科学与技术",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "024",
+          "CollegeName": "卓越工程师学院",
+          "MajorCode": "085603",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "冶金工程",
+          "MajorPlannedEnrollment": "6",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "020200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "应用经济学",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "009",
+          "CollegeName": "信息工程学院",
+          "MajorCode": "081200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "计算机科学与技术",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "024",
+          "CollegeName": "卓越工程师学院",
+          "MajorCode": "085602",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "化学工程",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "025100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "金融",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            },
+            {
+              "AdmitYear": "2021"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "081402",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "结构工程",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "021",
+          "CollegeName": "国际创新研究院（南昌）",
+          "MajorCode": "077602",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "环境工程",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "085702",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "安全工程",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085602",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "化学工程",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            }
+          ],
+          "CollegeCode": "020",
+          "CollegeName": "商学院（南昌）",
+          "MajorCode": "025100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "金融",
+          "MajorPlannedEnrollment": "9",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2024"
+            }
+          ],
+          "CollegeCode": "022",
+          "CollegeName": "江西先进铜产业研究院",
+          "MajorCode": "085603",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "冶金工程",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "024",
+          "CollegeName": "卓越工程师学院",
+          "MajorCode": "085601",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料工程",
+          "MajorPlannedEnrollment": "7",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "006",
+          "CollegeName": "土木与测绘工程学院",
+          "MajorCode": "081406",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "桥梁与隧道工程",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            },
+            {
+              "AdmitYear": "2022"
+            }
+          ],
+          "CollegeCode": "019",
+          "CollegeName": "软件工程学院（南昌）",
+          "MajorCode": "085901",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "土木工程",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            },
+            {
+              "AdmitYear": "2025"
+            },
+            {
+              "AdmitYear": "2024"
+            },
+            {
+              "AdmitYear": "2023"
+            }
+          ],
+          "CollegeCode": "005",
+          "CollegeName": "资源与环境工程学院",
+          "MajorCode": "081405",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "防灾减灾工程及防护工程",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085601",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料工程",
+          "MajorPlannedEnrollment": "15",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085705",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "矿业工程",
+          "MajorPlannedEnrollment": "8",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "010",
+          "CollegeName": "理学院",
+          "MajorCode": "081200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "计算机科学与技术",
+          "MajorPlannedEnrollment": "6",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "080600",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "冶金工程",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "081901",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "采矿工程",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085404",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "计算机技术",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "022",
+          "CollegeName": "江西先进铜产业研究院",
+          "MajorCode": "080600",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "冶金工程",
+          "MajorPlannedEnrollment": "1",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "081100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "控制科学与工程",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "011",
+          "CollegeName": "经济管理学院",
+          "MajorCode": "087100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "管理科学与工程",
+          "MajorPlannedEnrollment": "11",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "080500",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "材料科学与工程",
+          "MajorPlannedEnrollment": "8",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085702",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "安全工程",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [],
+          "CollegeCode": "026",
+          "CollegeName": "有色金属产业发展研究院",
+          "MajorCode": "120100",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "管理科学与工程",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085406",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "控制工程",
+          "MajorPlannedEnrollment": "3",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085501",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "机械工程",
+          "MajorPlannedEnrollment": "4",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "081902",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "矿物加工工程",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "080200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "机械工程",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "081200",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "计算机科学与技术",
+          "MajorPlannedEnrollment": "2",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "023",
+          "CollegeName": "赣南实验室",
+          "MajorCode": "085509",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "智能制造技术",
+          "MajorPlannedEnrollment": "5",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
+        },
+        {
+          "AdmitInfos": [
+            {
+              "AdmitYear": "2026"
+            }
+          ],
+          "CollegeCode": "004",
+          "CollegeName": "化学化工学院",
+          "MajorCode": "086002",
+          "MajorEnrollmentYear": "2026",
+          "MajorLearningWay": "全日制",
+          "MajorName": "制药工程",
+          "MajorPlannedEnrollment": "10",
+          "UniversityCode": "10407",
+          "UniversityName": "江西理工大学",
+          "UniversityPartition": "A",
+          "UniversityProvince": "江西"
         }
       ]
     }

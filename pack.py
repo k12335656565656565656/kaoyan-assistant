@@ -19,11 +19,11 @@ except:
     pass
 
 # 创建目录
-for d in ["data/corpus", "data/corpus_demo", "skills", "templates", "test_data", "kaoyan_predict/auth"]:
+for d in ["data/corpus", "data/corpus_demo", "data/katex", "skills", "templates", "test_data", "kaoyan_predict/auth"]:
     (PACK_DIR / d).mkdir(parents=True, exist_ok=True)
 
 print("[1/5] Copying core files...")
-core_files = ["app.py", "admin.py", "knowledge_base.py", "kaoyan_predict.py", "requirements.txt", "SETUP.md", "DEPLOY.md"]
+core_files = ["app.py", "admin.py", "knowledge_base.py", "kaoyan_predict.py", "recommend.py", "requirements.txt", "SETUP.md", "DEPLOY.md"]
 bat_files = ["启动.bat", "启动考研RAG_Streamlit.bat"]
 for f in core_files + bat_files:
     src = ROOT / f

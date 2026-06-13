@@ -7,7 +7,7 @@ import streamlit as st
 import sqlite3
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 import json
 import base64
 import urllib.request
