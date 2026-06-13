@@ -19,11 +19,11 @@ except:
     pass
 
 # 创建目录
-for d in ["data/corpus", "data/corpus_demo", "data/katex", "data/reference", "skills", "templates", "test_data", "kaoyan_predict/auth"]:
+for d in ["data/corpus", "data/corpus_demo", "data/katex", "skills", "templates", "test_data", "kaoyan_predict/auth"]:
     (PACK_DIR / d).mkdir(parents=True, exist_ok=True)
 
 print("[1/5] Copying core files...")
-core_files = ["app.py", "admin.py", "knowledge_base.py", "kaoyan_predict.py", "recommend.py", "requirements.txt", "SETUP.md", "DEPLOY.md"]
+core_files = ["app.py", "admin.py", "knowledge_base.py", "kaoyan_predict.py", "requirements.txt", "SETUP.md", "DEPLOY.md"]
 bat_files = ["启动.bat", "启动考研RAG_Streamlit.bat"]
 for f in core_files + bat_files:
     src = ROOT / f
@@ -65,27 +65,11 @@ for f in pred_dir.rglob("*"):
         pred_count += 1
 print(f"    {pred_count} files")
 
-print("[5/5] Copying templates, katex, and reference files...")
+print("[5/5] Copying templates...")
 templates = ROOT / "templates"
 for f in templates.iterdir():
     if f.is_file():
-        dest = PACK_DIR / "templates" / f.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(f, dest)
-
-# Katex 本地文件
-katex_dir = ROOT / "data" / "katex"
-for f in katex_dir.iterdir():
-    if f.is_file():
-        shutil.copy2(f, PACK_DIR / "data" / "katex" / f.name)
-
-# reference 文件（Pandoc 模板等）
-ref_dir = ROOT / "data" / "reference"
-if ref_dir.exists():
-    for f in ref_dir.iterdir():
-        if f.is_file():
-            shutil.copy2(f, PACK_DIR / "data" / "reference" / f.name)
-    print("    reference files copied")
+        shutil.copy2(f, PACK_DIR / f.name)
 
 # 拷贝演示测试数据
 test_data = ROOT / "test_data"
