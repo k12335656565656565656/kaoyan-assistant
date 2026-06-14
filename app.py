@@ -25,19 +25,14 @@ from dotenv import load_dotenv
 from docx import Document
 from docx.shared import Pt
 
-# Monkey-patch Streamlit 的 CachedWidgetWarning 检测（CookieManager 在 @st.cache_resource 中需要）
-import streamlit.elements.lib.policies as _policies
-import streamlit.components.v1.custom_component as _cc
-_policies.check_cache_replay_rules = lambda: None
-_cc.check_cache_replay_rules = lambda: None
-
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = "YOUR_API_KEY_HERE"
-API_BASE = "https://api.xiaomimimo.com/v1"
-MODEL_NAME = "mimo-v2.5"
+load_dotenv()  # 加载 .env 文件
+API_KEY = os.environ.get("AI_API_KEY", "YOUR_API_KEY_HERE")
+API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
+MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5")
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
 # 考纲分类：数学一独有 / 数学三独有
@@ -109,11 +104,10 @@ st.components.v1.html("""
 
 # ==================== 持久化登录（CookieManager 方案） ====================
 
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+# 每个会话独立创建 CookieManager，避免 @st.cache_resource 跨用户污染
+if "cookie_manager" not in st.session_state:
+    st.session_state.cookie_manager = stx.CookieManager()
+cookie_manager = st.session_state.cookie_manager
 
 def generate_login_token():
     """生成 64 字符随机 token"""
