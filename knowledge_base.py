@@ -17,7 +17,9 @@ from pathlib import Path
 
 # ==================== 配置（从环境变量读取） ====================
 MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
-API_KEY = os.environ.get("AI_API_KEY", "")
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
+if API_KEY in {"YOUR_API_KEY_HERE", "your-api-key-here", "sk-your-key-here"}:
+    API_KEY = ""
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 

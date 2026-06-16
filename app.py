@@ -25,6 +25,8 @@ from dotenv import load_dotenv
 from docx import Document
 from docx.shared import Pt
 
+load_dotenv(Path(__file__).with_name(".env"))
+
 # Monkey-patch Streamlit 的 CachedWidgetWarning 检测（CookieManager 在 @st.cache_resource 中需要）
 import streamlit.elements.lib.policies as _policies
 import streamlit.components.v1.custom_component as _cc
@@ -35,9 +37,11 @@ _cc.check_cache_replay_rules = lambda: None
 st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
-API_BASE = "https://api.xiaomimimo.com/v1"
-MODEL_NAME = "mimo-v2.5"
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
+if API_KEY in {"YOUR_API_KEY_HERE", "your-api-key-here", "sk-your-key-here"}:
+    API_KEY = ""
+API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
+MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5")
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
 # 考纲分类：数学一独有 / 数学三独有
@@ -49,6 +53,124 @@ DEMO_DATA_DIR = Path("data/corpus_demo")
 REFERENCE_DIR = Path("data/reference")
 MEMORY_DB = "data/memory.db"
 EXPERIENCE_FILE = "agent_experience.md"
+
+def linkify_markdown_urls(text):
+    """Render bare URLs as explicit Markdown links without swallowing trailing punctuation."""
+    if not text:
+        return ""
+
+    def repl(match):
+        url = match.group(1).rstrip("._")
+        suffix = match.group(1)[len(url):]
+        return f"[{url}]({url}){suffix}"
+
+    return re.sub(r"(https?://[^\s，,。；;）)\]】]+)", repl, str(text))
+
+
+def format_subjects_for_note(subjects):
+    marks = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧"]
+    parts = []
+    for i, subject in enumerate(subjects or []):
+        mark = marks[i] if i < len(marks) else ""
+        code = subject.get("code", "")
+        name = subject.get("name", "")
+        parts.append(f"{mark}{code}{name}")
+    return " | ".join([p for p in parts if p.strip()])
+
+
+def build_program_notes(base_notes, selected_program, school_info):
+    notes = []
+    skip_prefixes = (
+        "官方核验渠道：",
+        "权威来源：",
+        "补充来源：",
+        "补充说明：",
+        "计划招生：",
+        "学位类型：",
+        "院系/方向：",
+        "初试科目：",
+    )
+    for note in base_notes or []:
+        if any(str(note).startswith(prefix) for prefix in skip_prefixes):
+            continue
+        if note not in notes:
+            notes.append(note)
+
+    if selected_program:
+        notes.append(f"计划招生：{selected_program.get('plannedEnrollmentText') or '未公布'}")
+        notes.append(f"学位类型：{selected_program.get('degreeTypeLabel') or '未确认'}")
+        dept_direction = " · ".join([
+            selected_program.get("department") or "",
+            selected_program.get("researchDirection") or "",
+        ]).strip(" ·")
+        notes.append(f"院系/方向：{dept_direction or '未公布'}")
+        subjects_text = format_subjects_for_note(selected_program.get("examSubjects"))
+        notes.append(f"初试科目：{subjects_text or '未查询到'}")
+
+    return notes
+
+
+def confidence_label(value):
+    labels = {
+        "high": "高 / 权威",
+        "medium": "中 / 待复核",
+        "supplement": "补充源 / 需核验",
+        "derived": "推算 / 仅参考",
+        "realtime": "实时抓取",
+        "source_only": "仅找到来源",
+        "low": "低 / 需复核",
+        "unknown": "未核验",
+        "unavailable": "暂无数据",
+    }
+    return labels.get(str(value or "").lower(), value or "未核验")
+
+
+def build_field_source_rows(data, selected_program, display_subjects):
+    field_sources = data.get("fieldSources") or {}
+    match_info = data.get("matchInfo") or {}
+    matched = match_info.get("matched") or {}
+    program_source = {
+        "source": "当前选中招生项目",
+        "confidence": "supplement",
+        "note": "随上方招生项目切换；计划招生和考试科目仍需以研招网/招生单位官网核验",
+    } if selected_program else None
+
+    def meta(key, override=None):
+        raw = override or field_sources.get(key) or {}
+        return {
+            "来源": raw.get("source") or "未标注",
+            "可信度": confidence_label(raw.get("confidence")),
+            "说明": raw.get("note") or "",
+        }
+
+    def add(rows, field, value, key, override=None):
+        rows.append({
+            "字段": field,
+            "当前值": value or "未查询到",
+            **meta(key, override),
+        })
+
+    rows = []
+    display_match = selected_program or matched
+    match_value = " · ".join([
+        display_match.get("school") or matched.get("school") or data.get("school") or "",
+        display_match.get("department") or "",
+        display_match.get("major") or data.get("major") or "",
+        display_match.get("majorCode") or "",
+        display_match.get("degreeTypeLabel") or "",
+    ]).strip(" ·")
+
+    add(rows, "匹配结果", match_value, "match")
+    add(rows, "专业代码", (selected_program or matched).get("majorCode"), "majorCode", program_source if selected_program else None)
+    add(rows, "院校层次", (data.get("schoolInfo") or {}).get("schoolLevel"), "schoolLevel")
+    add(rows, "院系", (selected_program or {}).get("department") or (data.get("schoolInfo") or {}).get("department"), "department", program_source if selected_program else None)
+    add(rows, "计划招生", (selected_program or {}).get("plannedEnrollmentText") or (data.get("schoolInfo") or {}).get("plannedEnrollmentText"), "plannedEnrollment", program_source if selected_program else None)
+    add(rows, "考试科目", format_subjects_for_note(display_subjects), "examSubjects", program_source if selected_program else None)
+    add(rows, "推免比例", (data.get("schoolInfo") or {}).get("pushRatioDesc"), "pushRatio")
+    add(rows, "录取历史", f"{len(data.get('admissionHistory') or [])} 条", "admissionHistory")
+    add(rows, "27届预测", "已生成" if data.get("canPredict") else "未生成", "prediction")
+    add(rows, "媒体热度", f"{data.get('mediaHeat', 0)}/100", "mediaHeat")
+    return rows
 
 # ==================== CSS样式 ====================
 st.markdown("""
@@ -2628,7 +2750,7 @@ def generate_review_questions(knowledge_points):
         kb_list = "\n".join(kb_lines)
         context_text = "\n\n".join(contexts) if contexts else ""
 
-        system_prompt = """你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
+        system_prompt = r"""你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
 
 ⚠️ 题目必须紧扣知识点核心概念，不得偏题。
 ⚠️ 直接输出题目内容，不要输出"首先"、"我需要"等思考过程。
@@ -4053,40 +4175,117 @@ if st.session_state.page == "popularity":
 
     st.markdown("---")
 
+    query_mode_label = st.radio(
+        "查询方式",
+        ("模糊查询", "精确查询"),
+        horizontal=True,
+        key="popularity_query_mode",
+    )
+    match_mode = "exact" if query_mode_label == "精确查询" else "fuzzy"
+
     with st.form("popularity_form"):
-        col_sch, col_maj = st.columns(2)
-        with col_sch:
-            school = st.text_input("🏫 学校名称", placeholder="例如：华东师范大学")
-        with col_maj:
-            major = st.text_input("专业名称（可留空）", placeholder="例如：生物学")
-        submitted = st.form_submit_button("查询热度", use_container_width=True, type="primary")
+        if match_mode == "exact":
+            col_sch, col_maj, col_code, col_degree = st.columns([1.15, 1.15, 0.85, 0.7])
+            with col_sch:
+                school = st.text_input("🏫 院校", placeholder="例如：南京大学")
+            with col_maj:
+                major = st.text_input("📖 专业", placeholder="例如：软件工程（可留空）")
+            with col_code:
+                major_code = st.text_input("🔢 专业代码", placeholder="例如：085405")
+            with col_degree:
+                degree_type_label = st.selectbox("🎓 类型", ("不限", "学硕", "专硕"))
+        else:
+            col_sch, col_maj, col_code = st.columns([1.2, 1.2, 0.8])
+            with col_sch:
+                school = st.text_input("🏫 学校名称", placeholder="例如：华东师范大学")
+            with col_maj:
+                major = st.text_input("📖 专业名称（可留空）", placeholder="例如：生物学")
+            with col_code:
+                major_code = st.text_input("🔢 专业代码（可选）", placeholder="例如：071000")
+            degree_type_label = "不限"
+        submitted = st.form_submit_button("🔍 查询热度", use_container_width=True, type="primary")
 
     if "_kaoyan_cache" not in st.session_state:
         st.session_state._kaoyan_cache = {}
 
-    if submitted and school:
-        cache_key = f"{school.strip()}|{major.strip()}"
-        with st.spinner("正在分析院校热度（数据 + 媒体双引擎）..."):
-            try:
-                raw = kaoyan_predict.predict(school, major)
-                data = kaoyan_predict.normalize_for_ui(raw)
-                st.session_state._kaoyan_cache[cache_key] = data
-                data["_school"] = school.strip()
-                data["_major"] = major.strip() or school.strip()
-                st.session_state._kaoyan_last = cache_key
-            except kaoyan_predict.KaoyanPredictError as e:
-                st.error(f"预测失败：{e}")
-                st.session_state._kaoyan_last = None
+    if submitted:
+        school_clean = school.strip() if school else ""
+        major_clean = major.strip() if major else ""
+        major_code_clean = major_code.strip() if major_code else ""
+        degree_type = {"学硕": "academic", "专硕": "professional"}.get(degree_type_label, "")
+
+        if not school_clean:
+            st.warning("请输入院校名称")
+            st.session_state._kaoyan_last = None
+        elif match_mode == "exact" and not major_clean and not major_code_clean:
+            st.warning("精确查询请输入专业名称或专业代码")
+            st.session_state._kaoyan_last = None
+        else:
+            cache_key = f"{match_mode}|{degree_type or 'any'}|{school_clean}|{major_clean}|{major_code_clean}"
+            with st.spinner("🔍 正在分析院校热度（数据 + 媒体双引擎）..."):
+                try:
+                    raw = kaoyan_predict.predict(
+                        school_clean,
+                        major_clean,
+                        match_mode=match_mode,
+                        degree_type=degree_type,
+                        major_code=major_code_clean,
+                    )
+                    data = kaoyan_predict.normalize_for_ui(raw)
+                    st.session_state._kaoyan_cache[cache_key] = data
+                    data["_school"] = school_clean
+                    data["_major"] = major_clean or school_clean
+                    data["_major_code"] = major_code_clean
+                    st.session_state._kaoyan_last = cache_key
+                except kaoyan_predict.KaoyanPredictError as e:
+                    st.error(f"预测失败：{e}")
+                    st.session_state._kaoyan_last = None
 
     last_key = st.session_state.get("_kaoyan_last")
     if last_key and last_key in st.session_state._kaoyan_cache:
         data = st.session_state._kaoyan_cache[last_key]
         heat = data["compositeHeat"]
         level = data["heatLevel"]
+        can_predict = bool(data.get("canPredict"))
+        program_options = data.get("programOptions") or []
+        selected_program = None
+
+        if program_options:
+            st.markdown("### 🎯 招生项目")
+            program_rows = []
+            labels = []
+            for i, p in enumerate(program_options):
+                label_parts = [
+                    p.get("department") or "未知院系",
+                    p.get("major") or "",
+                    p.get("degreeTypeLabel") or "",
+                    p.get("plannedEnrollmentText") or "计划招生未公布",
+                    p.get("researchDirection") or "",
+                ]
+                label = " · ".join([part for part in label_parts if part])
+                labels.append(label)
+                program_rows.append({
+                    "院系": p.get("department") or "未知",
+                    "专业代码": p.get("majorCode") or "未知",
+                    "专业": p.get("major") or "未知",
+                    "类型": p.get("degreeTypeLabel") or "未确认",
+                    "学习方式": p.get("learningWay") or "未确认",
+                    "计划招生": p.get("plannedEnrollmentText") or "未公布",
+                    "研究方向": p.get("researchDirection") or "未公布",
+                })
+            selected_label = st.selectbox("选择要查看的招生项目", labels, key=f"program_select_{last_key}")
+            selected_index = labels.index(selected_label) if selected_label in labels else 0
+            selected_program = program_options[selected_index]
+            st.dataframe([program_rows[selected_index]], use_container_width=True, hide_index=True)
+        display_subjects = selected_program.get("examSubjects") if selected_program else data.get("examSubjects")
 
         st.markdown('<div class="qa-card">', unsafe_allow_html=True)
-        st.markdown(f"### {level['color']} 综合热度 {heat}/100  ·  {level['label']}")
-        st.progress(heat / 100)
+        if can_predict:
+            st.markdown(f"### {level['color']} 综合热度 {heat}/100  ·  {level['label']}")
+            st.progress(heat / 100)
+        else:
+            st.markdown("### ⬜ 暂无权威录取热度")
+            st.info("缺少权威录取历史、报录比或复试线数据，本次不生成综合热度判断。")
 
         col_d, col_m = st.columns(2)
         with col_d:
@@ -4094,8 +4293,42 @@ if st.session_state.page == "popularity":
         with col_m:
             st.metric("📱 媒体热度", f"{data['mediaHeat']}/100")
 
-        st.caption(f"📡 {data['dataSource']}  |  🎯 置信度 {data['confidence']}%  |  趋势 {data['trend']}")
+        st.caption(f"📡 {data['dataSource']}  |  🎯 置信度 {data['confidence']}%  |  📈 趋势 {data['trend']}")
+        match_info = data.get("matchInfo") or {}
+        matched = match_info.get("matched") or {}
+        display_match = selected_program or matched
+        if display_match:
+            degree_text = display_match.get("degreeTypeLabel") or {"academic": "学硕", "professional": "专硕"}.get(display_match.get("degreeType"), "")
+            match_parts = [
+                display_match.get("school") or matched.get("school"),
+                display_match.get("department"),
+                display_match.get("major"),
+                display_match.get("majorCode"),
+                degree_text,
+            ]
+            st.caption("🔎 匹配结果：" + " · ".join([p for p in match_parts if p]))
         st.markdown('</div>', unsafe_allow_html=True)
+
+        evidence = data.get("admissionEvidence") or []
+        evidence_summary = data.get("admissionEvidenceSummary") or {}
+        prediction_basis = data.get("predictionBasis") or "none"
+
+        if evidence:
+            with st.expander("🔎 真实来源与自动提取结果", expanded=not data.get("hasAuthoritativeAdmissionHistory")):
+                for item in evidence:
+                    title = item.get("title") or item.get("url") or "来源页面"
+                    url = item.get("url") or ""
+                    type_label = item.get("typeLabel") or "官方来源"
+                    confidence = confidence_label(item.get("confidence"))
+                    metric_text = item.get("metricText") or "未自动提取到稳定数值"
+                    source_label = item.get("sourceLabel") or item.get("host") or "官方来源"
+                    if url:
+                        st.markdown(f"- **{type_label}**：[{title}]({url})")
+                    else:
+                        st.markdown(f"- **{type_label}**：{title}")
+                    st.caption(f"{source_label} · 可信度：{confidence} · {metric_text}")
+                for warning in evidence_summary.get("warnings") or []:
+                    st.warning(warning)
 
         if data.get("admissionHistory"):
             st.markdown("### 录取历史")
@@ -4109,20 +4342,57 @@ if st.session_state.page == "popularity":
                     "复试线": f"{h['cutScore']}分",
                 })
             st.dataframe(rows, use_container_width=True, hide_index=True)
+            if prediction_basis == "official_evidence_extracted":
+                st.warning("这组录取历史来自学校官网/研招网页面自动提取，来源页面可信，但数字仍需人工核验；下方预测仅作低可信参考。")
+        else:
+            st.info("暂未查询到权威录取历史；不展示报录比、复试线等推断数据。")
+            with st.expander("🔎 权威录取数据可查渠道"):
+                si = data.get("schoolInfo") or {}
+                official_channels = si.get("officialChannels") or []
+                if official_channels:
+                    for ch in official_channels:
+                        label = ch.get("label") or "权威渠道"
+                        url = ch.get("url") or ""
+                        if url:
+                            st.markdown(f"- [{label}]({url})")
+                else:
+                    if si.get("sourceUrl"):
+                        st.markdown(f"- [招生单位研究生招生网]({si['sourceUrl']})")
+                    st.markdown("- [中国研究生招生信息网硕士专业目录](https://yz.chsi.com.cn/zsml/)")
+                admission_data_channels = si.get("admissionDataChannels") or []
+                if admission_data_channels:
+                    st.markdown("**录取数据核验：**")
+                    for ch in admission_data_channels:
+                        label = ch.get("label") or "录取数据渠道"
+                        url = ch.get("url") or ""
+                        if url:
+                            st.markdown(f"- [{label}]({url})")
+                query_school = data.get("school") or data.get("_school") or ""
+                query_major = data.get("major") or data.get("_major") or ""
+                query_major_code = data.get("_major_code") or (match_info.get("requested") or {}).get("majorCode") or (matched or {}).get("majorCode") or ""
+                keyword = " ".join([query_school, query_major, query_major_code, "复试名单 拟录取名单 复试分数线"]).strip()
+                if keyword:
+                    st.markdown(f"- 建议在招生单位官网/学院官网检索：`{keyword}`")
+                st.caption("只把招生单位官网、学院官网、研招网信息公开中可核验的数据作为录取历史依据。")
 
         pred = data.get("prediction", {})
         st.markdown("### 🔮 27届预测")
-        col_p1, col_p2, col_p3 = st.columns(3)
-        with col_p1:
-            st.metric("预计报考", f"{pred.get('estimatedApplicants', 0)}人")
-        with col_p2:
-            st.metric("预计报录比", f"{pred.get('estimatedRatio', '?')}:1")
-        with col_p3:
-            st.metric("预计复试线", f"{pred.get('estimatedCutScore', '?')}分")
+        if can_predict:
+            if prediction_basis == "official_evidence_extracted":
+                st.warning("预测基于自动提取的官网指标，可信度较低；建议打开上方来源页面核对后再使用。")
+            col_p1, col_p2, col_p3 = st.columns(3)
+            with col_p1:
+                st.metric("预计报考", f"{pred.get('estimatedApplicants', 0)}人")
+            with col_p2:
+                st.metric("预计报录比", f"{pred.get('estimatedRatio', '?')}:1")
+            with col_p3:
+                st.metric("预计复试线", f"{pred.get('estimatedCutScore', '?')}分")
+        else:
+            st.info("缺少权威录取历史，本次暂不生成报考人数、报录比和复试线预测。")
 
-        if data.get("examSubjects"):
-            with st.expander("考试科目"):
-                for s in data["examSubjects"]:
+        if display_subjects:
+            with st.expander("📚 考试科目"):
+                for s in display_subjects:
                     st.markdown(f"- **{s['code']}** {s['name']}（{s['type']}）")
 
         if data.get("platforms"):
@@ -4147,14 +4417,25 @@ if st.session_state.page == "popularity":
             si = data["schoolInfo"]
             with st.expander("🏫 院校信息"):
                 st.markdown(f"- **层次**：{si.get('schoolLevel', '未知')}")
-                st.markdown(f"- **院系**：{si.get('department', '未知')}")
+                st.markdown(f"- **院系**：{(selected_program or {}).get('department') or si.get('department', '未知')}")
+                planned_text = (selected_program or {}).get("plannedEnrollmentText") or si.get("plannedEnrollmentText")
+                if planned_text:
+                    st.markdown(f"- **计划招生**：{planned_text}")
                 if si.get("pushRatioDesc"):
                     st.markdown(f"- **推免**：{si['pushRatioDesc']}")
 
-        if data.get("notes"):
-            with st.expander("备注"):
-                for n in data["notes"]:
-                    st.markdown(f"- {n}")
+        display_notes = build_program_notes(data.get("notes"), selected_program, data.get("schoolInfo"))
+        if display_notes:
+            with st.expander("📝 备注"):
+                for n in display_notes:
+                    st.markdown(f"- {linkify_markdown_urls(n)}")
+
+        with st.expander("🔖 后台字段来源（可选）"):
+            st.dataframe(
+                build_field_source_rows(data, selected_program, display_subjects),
+                use_container_width=True,
+                hide_index=True,
+            )
 
         # ── 个人建议 ──
         st.markdown("---")
