@@ -14,8 +14,13 @@ import urllib.request
 import urllib.error
 import re
 from pathlib import Path
+from uuid import uuid4
 
-from schemas.knowledge_schema import knowledge_point_to_dict
+from schemas.knowledge_schema import (
+    knowledge_point_to_dict,
+    normalize_knowledge_point_draft,
+    validate_required_fields,
+)
 from services.knowledge_json_extractor import extract_knowledge_points_as_drafts
 from services.material_router import route_material_input
 
@@ -395,11 +400,159 @@ def get_review_items(user_id, subject):
     return rows
 
 
+_DRAFT_LIST_FIELDS = [
+    "exam_question_styles",
+    "keywords",
+    "related_concepts",
+    "pitfalls",
+    "tags",
+]
+
+_DRAFT_EDITABLE_FIELDS = [
+    "knowledge_name",
+    "knowledge_type",
+    "subject",
+    "chapter_name",
+    "core_definition",
+    "exam_question_styles",
+    "keywords",
+    "related_concepts",
+    "pitfalls",
+    "example_or_application",
+    "review_priority",
+    "source_text",
+    "source_page",
+    "source_location",
+    "tags",
+    "mastery_state",
+    "is_ai_expansion",
+    "uncertainty_note",
+]
+
+
+def _ensure_session_draft_state():
+    if "knowledge_drafts" not in st.session_state:
+        legacy_points = st.session_state.get("_draft_knowledge_points") or []
+        st.session_state["knowledge_drafts"] = [_prepare_draft_for_session(point) for point in legacy_points]
+    if "confirmed_knowledge_drafts" not in st.session_state:
+        st.session_state["confirmed_knowledge_drafts"] = []
+    if "deleted_knowledge_draft_count" not in st.session_state:
+        st.session_state["deleted_knowledge_draft_count"] = 0
+    if "knowledge_draft_warnings" not in st.session_state:
+        st.session_state["knowledge_draft_warnings"] = st.session_state.get("_draft_knowledge_warnings") or []
+
+
+def _prepare_draft_for_session(point):
+    normalized = knowledge_point_to_dict(normalize_knowledge_point_draft(point))
+    normalized["_draft_id"] = str(point.get("_draft_id") or uuid4().hex)
+    return normalized
+
+
+def _set_draft_session_data(drafts, warnings):
+    st.session_state["knowledge_drafts"] = [_prepare_draft_for_session(point) for point in drafts]
+    st.session_state["confirmed_knowledge_drafts"] = []
+    st.session_state["deleted_knowledge_draft_count"] = 0
+    st.session_state["knowledge_draft_warnings"] = list(warnings or [])
+    st.session_state["_draft_knowledge_points"] = st.session_state["knowledge_drafts"]
+    st.session_state["_draft_knowledge_warnings"] = st.session_state["knowledge_draft_warnings"]
+
+
+def _sync_legacy_draft_keys():
+    st.session_state["_draft_knowledge_points"] = st.session_state.get("knowledge_drafts", [])
+    st.session_state["_draft_knowledge_warnings"] = st.session_state.get("knowledge_draft_warnings", [])
+
+
+def _draft_widget_key(draft_id, field_name):
+    return f"draft_{draft_id}_{field_name}"
+
+
+def _list_field_to_text(value):
+    if not value:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value if str(item).strip())
+    return str(value)
+
+
+def _build_draft_from_widget(draft_id, fallback_point):
+    payload = {}
+    for field_name in _DRAFT_EDITABLE_FIELDS:
+        widget_key = _draft_widget_key(draft_id, field_name)
+        if field_name == "is_ai_expansion":
+            payload[field_name] = st.session_state.get(widget_key, fallback_point.get(field_name, False))
+        elif field_name in _DRAFT_LIST_FIELDS:
+            payload[field_name] = st.session_state.get(widget_key, _list_field_to_text(fallback_point.get(field_name)))
+        else:
+            payload[field_name] = st.session_state.get(widget_key, fallback_point.get(field_name, ""))
+
+    normalized = knowledge_point_to_dict(normalize_knowledge_point_draft(payload))
+    normalized["_draft_id"] = draft_id
+    return normalized
+
+
+def _replace_draft_in_session(updated_point):
+    draft_id = updated_point.get("_draft_id")
+    updated_drafts = []
+    for point in st.session_state.get("knowledge_drafts", []):
+        if point.get("_draft_id") == draft_id:
+            updated_drafts.append(updated_point)
+        else:
+            updated_drafts.append(point)
+    st.session_state["knowledge_drafts"] = updated_drafts
+    _sync_legacy_draft_keys()
+
+
+def _remove_draft_widget_state(draft_id):
+    for field_name in _DRAFT_EDITABLE_FIELDS:
+        widget_key = _draft_widget_key(draft_id, field_name)
+        if widget_key in st.session_state:
+            del st.session_state[widget_key]
+
+
+def _remove_draft_from_session(draft_id, increment_deleted=True):
+    remaining = [point for point in st.session_state.get("knowledge_drafts", []) if point.get("_draft_id") != draft_id]
+    st.session_state["knowledge_drafts"] = remaining
+    if increment_deleted:
+        st.session_state["deleted_knowledge_draft_count"] = st.session_state.get("deleted_knowledge_draft_count", 0) + 1
+    _remove_draft_widget_state(draft_id)
+    _sync_legacy_draft_keys()
+
+
+def _confirm_draft_in_session(point):
+    confirmed = list(st.session_state.get("confirmed_knowledge_drafts", []))
+    confirmed.append(point)
+    st.session_state["confirmed_knowledge_drafts"] = confirmed
+    _remove_draft_from_session(point.get("_draft_id"), increment_deleted=False)
+
+
+def _confirm_all_drafts_in_session():
+    drafts = list(st.session_state.get("knowledge_drafts", []))
+    confirmed = list(st.session_state.get("confirmed_knowledge_drafts", []))
+    confirmed.extend(drafts)
+    st.session_state["confirmed_knowledge_drafts"] = confirmed
+    for point in drafts:
+        _remove_draft_widget_state(point.get("_draft_id"))
+    st.session_state["knowledge_drafts"] = []
+    _sync_legacy_draft_keys()
+
+
+def _clear_current_draft_session():
+    for point in st.session_state.get("knowledge_drafts", []):
+        _remove_draft_widget_state(point.get("_draft_id"))
+    st.session_state["knowledge_drafts"] = []
+    st.session_state["confirmed_knowledge_drafts"] = []
+    st.session_state["deleted_knowledge_draft_count"] = 0
+    st.session_state["knowledge_draft_warnings"] = []
+    st.session_state["_draft_knowledge_points"] = []
+    st.session_state["_draft_knowledge_warnings"] = []
+
+
 # ==================== UI 渲染 ====================
 
 def render_knowledge_page():
     """渲染专业知识库页面（4 个 Tab）"""
     user_id = st.session_state.get("user_id", 1)
+    _ensure_session_draft_state()
 
     if not API_KEY:
         st.error("⚠️ 未设置 API Key。请设置环境变量 `AI_API_KEY` 后重启。")
@@ -512,10 +665,7 @@ def render_knowledge_page():
                         )
 
                     st.session_state._material_result = material_result.to_dict()
-                    if "_draft_knowledge_points" in st.session_state:
-                        del st.session_state._draft_knowledge_points
-                    if "_draft_knowledge_warnings" in st.session_state:
-                        del st.session_state._draft_knowledge_warnings
+                    _clear_current_draft_session()
                     st.session_state._ocr_preview = material_result.extracted_text
                     st.session_state._ocr_material_id = material_id
                     st.session_state._ocr_chapter = chapter_name.strip()
@@ -567,12 +717,12 @@ def render_knowledge_page():
                                     max_points=12,
                                     llm_callable=lambda prompt: _call_llm_api(prompt, model="mimo-v2.5", max_tokens=2200),
                                 )
-                                st.session_state._draft_knowledge_points = [
-                                    knowledge_point_to_dict(point) for point in drafts
-                                ]
-                                st.session_state._draft_knowledge_warnings = draft_warnings
+                                _set_draft_session_data(
+                                    [knowledge_point_to_dict(point) for point in drafts],
+                                    draft_warnings,
+                                )
                                 if drafts:
-                                    st.success(f"✅ 已生成 {len(drafts)} 条结构化知识点草稿。当前仅展示草稿，暂不自动入库。")
+                                    st.success(f"✅ 已生成 {len(drafts)} 条结构化知识点草稿。现在可以逐条编辑、删除、确认。")
                                 else:
                                     st.warning("未能生成有效的结构化知识点草稿，请减少文本长度或重新生成。")
                             except Exception as e:
@@ -588,42 +738,108 @@ def render_knowledge_page():
                     del st.session_state._ocr_file_type
                     if "_material_result" in st.session_state:
                         del st.session_state._material_result
-                    if "_draft_knowledge_points" in st.session_state:
-                        del st.session_state._draft_knowledge_points
-                    if "_draft_knowledge_warnings" in st.session_state:
-                        del st.session_state._draft_knowledge_warnings
+                    _clear_current_draft_session()
                     st.rerun()
 
-            draft_points = st.session_state.get("_draft_knowledge_points") or []
-            draft_warnings = st.session_state.get("_draft_knowledge_warnings") or []
+            draft_points = st.session_state.get("knowledge_drafts") or []
+            draft_warnings = st.session_state.get("knowledge_draft_warnings") or []
+            confirmed_drafts = st.session_state.get("confirmed_knowledge_drafts") or []
+            deleted_count = st.session_state.get("deleted_knowledge_draft_count", 0)
             if draft_points:
                 st.markdown("---")
-                st.subheader("🧩 结构化知识点草稿")
-                st.info("当前阶段仅展示结构化草稿，逐条编辑/删除/确认与正式入库将在后续 PR5/PR6 实现。")
+                st.subheader("🧩 候选知识点草稿确认区")
+                st.info("当前阶段仅完成候选知识点确认流程。已确认草稿暂存在当前会话中，尚未正式写入私有知识库。正式入库将在 PR6 实现。")
                 if draft_warnings:
                     for warning in draft_warnings:
                         st.warning(warning)
 
+                warning_count = sum(1 for point in draft_points if validate_required_fields(point))
+                s1, s2, s3, s4 = st.columns(4)
+                with s1:
+                    st.metric("当前草稿", len(draft_points))
+                with s2:
+                    st.metric("已确认", len(confirmed_drafts))
+                with s3:
+                    st.metric("已删除", deleted_count)
+                with s4:
+                    st.metric("有警告", warning_count)
+
+                action_col1, action_col2 = st.columns(2)
+                with action_col1:
+                    if st.button("✅ 确认全部剩余草稿", use_container_width=True, key="confirm_all_drafts"):
+                        _confirm_all_drafts_in_session()
+                        st.success("已将当前剩余草稿加入本次已确认知识点。")
+                        st.rerun()
+                with action_col2:
+                    if st.button("🗑️ 清空本次草稿", use_container_width=True, key="clear_all_drafts"):
+                        _clear_current_draft_session()
+                        st.success("已清空本次草稿与本次已确认知识点。")
+                        st.rerun()
+
                 for idx, point in enumerate(draft_points, start=1):
                     title = point.get("knowledge_name") or f"未命名知识点 {idx}"
                     ktype = point.get("knowledge_type") or "未标注类型"
+                    draft_id = point.get("_draft_id") or str(uuid4().hex)
+                    point_warnings = validate_required_fields(point)
                     with st.expander(f"{idx}. {title} | {ktype}"):
-                        st.markdown(f"**核心定义**：{point.get('core_definition') or '未提取'}")
-                        st.markdown(f"**关键词**：{', '.join(point.get('keywords') or []) or '未提取'}")
-                        st.markdown(f"**常见考法**：{', '.join(point.get('exam_question_styles') or []) or '未提取'}")
-                        st.markdown(f"**相关概念**：{', '.join(point.get('related_concepts') or []) or '未提取'}")
-                        st.markdown(f"**易错点**：{', '.join(point.get('pitfalls') or []) or '未提取'}")
-                        st.markdown(f"**示例/应用**：{point.get('example_or_application') or '未提取'}")
-                        st.markdown(f"**原文依据**：{point.get('source_text') or '未提取'}")
-                        if point.get("uncertainty_note"):
-                            st.caption(f"不确定性说明：{point.get('uncertainty_note')}")
-                        if point.get("is_ai_expansion"):
-                            st.caption("该条包含 AI 扩展内容。")
-            elif draft_warnings:
+                        if point_warnings:
+                            for warning in point_warnings:
+                                st.warning(warning)
+
+                        st.text_input("knowledge_name", value=point.get("knowledge_name", ""), key=_draft_widget_key(draft_id, "knowledge_name"))
+                        st.text_input("knowledge_type", value=point.get("knowledge_type", ""), key=_draft_widget_key(draft_id, "knowledge_type"))
+                        st.text_input("subject", value=point.get("subject", ""), key=_draft_widget_key(draft_id, "subject"))
+                        st.text_input("chapter_name", value=point.get("chapter_name", ""), key=_draft_widget_key(draft_id, "chapter_name"))
+                        st.text_area("core_definition", value=point.get("core_definition", ""), key=_draft_widget_key(draft_id, "core_definition"), height=100)
+                        st.text_area("exam_question_styles（逗号分隔）", value=_list_field_to_text(point.get("exam_question_styles")), key=_draft_widget_key(draft_id, "exam_question_styles"), height=70)
+                        st.text_area("keywords（逗号分隔）", value=_list_field_to_text(point.get("keywords")), key=_draft_widget_key(draft_id, "keywords"), height=70)
+                        st.text_area("related_concepts（逗号分隔）", value=_list_field_to_text(point.get("related_concepts")), key=_draft_widget_key(draft_id, "related_concepts"), height=70)
+                        st.text_area("pitfalls（逗号分隔）", value=_list_field_to_text(point.get("pitfalls")), key=_draft_widget_key(draft_id, "pitfalls"), height=70)
+                        st.text_area("example_or_application", value=point.get("example_or_application", ""), key=_draft_widget_key(draft_id, "example_or_application"), height=90)
+                        st.selectbox("review_priority", ["低", "中", "高"], index=["低", "中", "高"].index(point.get("review_priority")) if point.get("review_priority") in ["低", "中", "高"] else 1, key=_draft_widget_key(draft_id, "review_priority"))
+                        st.text_area("source_text", value=point.get("source_text", ""), key=_draft_widget_key(draft_id, "source_text"), height=120)
+                        st.text_input("source_page", value=point.get("source_page", ""), key=_draft_widget_key(draft_id, "source_page"))
+                        st.text_input("source_location", value=point.get("source_location", ""), key=_draft_widget_key(draft_id, "source_location"))
+                        st.text_area("tags（逗号分隔）", value=_list_field_to_text(point.get("tags")), key=_draft_widget_key(draft_id, "tags"), height=70)
+                        st.selectbox("mastery_state", ["待复习", "学习中", "已掌握"], index=["待复习", "学习中", "已掌握"].index(point.get("mastery_state")) if point.get("mastery_state") in ["待复习", "学习中", "已掌握"] else 0, key=_draft_widget_key(draft_id, "mastery_state"))
+                        st.checkbox("is_ai_expansion", value=bool(point.get("is_ai_expansion")), key=_draft_widget_key(draft_id, "is_ai_expansion"))
+                        st.text_area("uncertainty_note", value=point.get("uncertainty_note", ""), key=_draft_widget_key(draft_id, "uncertainty_note"), height=80)
+
+                        b1, b2, b3 = st.columns(3)
+                        with b1:
+                            if st.button("💾 保存修改", key=f"save_draft_{draft_id}", use_container_width=True):
+                                updated_point = _build_draft_from_widget(draft_id, point)
+                                _replace_draft_in_session(updated_point)
+                                st.success("已保存该条草稿修改。")
+                                st.rerun()
+                        with b2:
+                            if st.button("🗑️ 删除该条", key=f"delete_draft_{draft_id}", use_container_width=True):
+                                _remove_draft_from_session(draft_id)
+                                st.success("已删除该条草稿。")
+                                st.rerun()
+                        with b3:
+                            if st.button("✅ 确认该条", key=f"confirm_draft_{draft_id}", use_container_width=True):
+                                updated_point = _build_draft_from_widget(draft_id, point)
+                                _confirm_draft_in_session(updated_point)
+                                st.success("已确认该条草稿，当前仅保存在会话中。")
+                                st.rerun()
+            elif draft_warnings or confirmed_drafts:
                 st.markdown("---")
-                st.subheader("🧩 结构化知识点草稿")
+                st.subheader("🧩 候选知识点草稿确认区")
+                st.info("当前阶段仅完成候选知识点确认流程。已确认草稿暂存在当前会话中，尚未正式写入私有知识库。正式入库将在 PR6 实现。")
                 for warning in draft_warnings:
                     st.warning(warning)
+
+            if confirmed_drafts:
+                st.markdown("---")
+                st.subheader("✅ 本次已确认知识点")
+                for idx, point in enumerate(confirmed_drafts, start=1):
+                    title = point.get("knowledge_name") or f"已确认知识点 {idx}"
+                    ktype = point.get("knowledge_type") or "未标注类型"
+                    with st.expander(f"{idx}. {title} | {ktype}"):
+                        st.markdown(f"**核心定义**：{point.get('core_definition') or '未提取'}")
+                        st.markdown(f"**原文依据**：{point.get('source_text') or '未提取'}")
+                        st.markdown(f"**标签**：{', '.join(point.get('tags') or []) or '未提取'}")
 
         # 已上传资料列表
         st.markdown("---")
