@@ -15,6 +15,8 @@ import urllib.error
 import re
 from pathlib import Path
 
+from schemas.knowledge_schema import knowledge_point_to_dict
+from services.knowledge_json_extractor import extract_knowledge_points_as_drafts
 from services.material_router import route_material_input
 
 # ==================== 配置（从环境变量读取） ====================
@@ -510,6 +512,10 @@ def render_knowledge_page():
                         )
 
                     st.session_state._material_result = material_result.to_dict()
+                    if "_draft_knowledge_points" in st.session_state:
+                        del st.session_state._draft_knowledge_points
+                    if "_draft_knowledge_warnings" in st.session_state:
+                        del st.session_state._draft_knowledge_warnings
                     st.session_state._ocr_preview = material_result.extracted_text
                     st.session_state._ocr_material_id = material_id
                     st.session_state._ocr_chapter = chapter_name.strip()
@@ -553,25 +559,24 @@ def render_knowledge_page():
                 if st.button("✅ 确认归纳知识点", use_container_width=True, type="primary"):
                     if edited_text.strip():
                         with st.spinner("正在归纳知识点..."):
-                            conn = sqlite3.connect(MEMORY_DB)
-                            c = conn.cursor()
                             try:
-                                llm_result = extract_knowledge_from_text(edited_text, selected_subject, chapter_name)
-                                count = save_knowledge_points(user_id, material_id, selected_subject, chapter_name, llm_result)
-                                conn.commit()
-                                conn.close()
-                                del st.session_state._ocr_preview
-                                del st.session_state._ocr_material_id
-                                del st.session_state._ocr_chapter
-                                del st.session_state._ocr_subject
-                                del st.session_state._ocr_file_type
-                                if "_material_result" in st.session_state:
-                                    del st.session_state._material_result
-                                st.success(f"✅ 上传成功！提取了 {count} 个知识点。")
-                                st.rerun()
+                                drafts, draft_warnings = extract_knowledge_points_as_drafts(
+                                    edited_text,
+                                    subject=selected_subject,
+                                    chapter_name=chapter_name,
+                                    max_points=12,
+                                    llm_callable=lambda prompt: _call_llm_api(prompt, model="mimo-v2.5", max_tokens=2200),
+                                )
+                                st.session_state._draft_knowledge_points = [
+                                    knowledge_point_to_dict(point) for point in drafts
+                                ]
+                                st.session_state._draft_knowledge_warnings = draft_warnings
+                                if drafts:
+                                    st.success(f"✅ 已生成 {len(drafts)} 条结构化知识点草稿。当前仅展示草稿，暂不自动入库。")
+                                else:
+                                    st.warning("未能生成有效的结构化知识点草稿，请减少文本长度或重新生成。")
                             except Exception as e:
-                                conn.close()
-                                st.warning(f"AI 处理失败，文件已保存: {e}")
+                                st.warning(f"AI 处理失败：{e}")
                     else:
                         st.warning("识别结果为空，无法归纳")
             with col_retry:
@@ -583,7 +588,42 @@ def render_knowledge_page():
                     del st.session_state._ocr_file_type
                     if "_material_result" in st.session_state:
                         del st.session_state._material_result
+                    if "_draft_knowledge_points" in st.session_state:
+                        del st.session_state._draft_knowledge_points
+                    if "_draft_knowledge_warnings" in st.session_state:
+                        del st.session_state._draft_knowledge_warnings
                     st.rerun()
+
+            draft_points = st.session_state.get("_draft_knowledge_points") or []
+            draft_warnings = st.session_state.get("_draft_knowledge_warnings") or []
+            if draft_points:
+                st.markdown("---")
+                st.subheader("🧩 结构化知识点草稿")
+                st.info("当前阶段仅展示结构化草稿，逐条编辑/删除/确认与正式入库将在后续 PR5/PR6 实现。")
+                if draft_warnings:
+                    for warning in draft_warnings:
+                        st.warning(warning)
+
+                for idx, point in enumerate(draft_points, start=1):
+                    title = point.get("knowledge_name") or f"未命名知识点 {idx}"
+                    ktype = point.get("knowledge_type") or "未标注类型"
+                    with st.expander(f"{idx}. {title} | {ktype}"):
+                        st.markdown(f"**核心定义**：{point.get('core_definition') or '未提取'}")
+                        st.markdown(f"**关键词**：{', '.join(point.get('keywords') or []) or '未提取'}")
+                        st.markdown(f"**常见考法**：{', '.join(point.get('exam_question_styles') or []) or '未提取'}")
+                        st.markdown(f"**相关概念**：{', '.join(point.get('related_concepts') or []) or '未提取'}")
+                        st.markdown(f"**易错点**：{', '.join(point.get('pitfalls') or []) or '未提取'}")
+                        st.markdown(f"**示例/应用**：{point.get('example_or_application') or '未提取'}")
+                        st.markdown(f"**原文依据**：{point.get('source_text') or '未提取'}")
+                        if point.get("uncertainty_note"):
+                            st.caption(f"不确定性说明：{point.get('uncertainty_note')}")
+                        if point.get("is_ai_expansion"):
+                            st.caption("该条包含 AI 扩展内容。")
+            elif draft_warnings:
+                st.markdown("---")
+                st.subheader("🧩 结构化知识点草稿")
+                for warning in draft_warnings:
+                    st.warning(warning)
 
         # 已上传资料列表
         st.markdown("---")
