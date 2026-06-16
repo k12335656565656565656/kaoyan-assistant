@@ -15,6 +15,8 @@ import urllib.error
 import re
 from pathlib import Path
 
+from services.material_router import route_material_input
+
 # ==================== 配置（从环境变量读取） ====================
 MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
 API_KEY = os.environ.get("AI_API_KEY", "")
@@ -447,6 +449,7 @@ def render_knowledge_page():
 - 建议上传单个 PDF/图片，内容控制在 **50 页以内**
 - 每个 PDF 代表一个大章节，请在下方命名
 - 支持 PDF、PNG、JPG、TXT 格式
+- 也支持直接粘贴文本资料
 - 图片会直接用 AI 多模态识别，无需 OCR
 """)
 
@@ -454,42 +457,60 @@ def render_knowledge_page():
         with st.form("upload_material"):
             chapter_name = st.text_input("章节名称", placeholder="例如：第一章 栈和队列")
             uploaded_file = st.file_uploader("上传资料", type=["pdf", "png", "jpg", "jpeg", "txt"], key="material_upload")
+            pasted_text = st.text_area("或直接粘贴资料文本", height=180, placeholder="将课程讲义、笔记或整理后的原文粘贴到这里")
             if st.form_submit_button("上传并处理", use_container_width=True):
-                if uploaded_file and chapter_name.strip():
+                if uploaded_file and pasted_text.strip():
+                    st.warning("请在上传文件和粘贴文本之间选择一种输入方式。")
+                elif chapter_name.strip() and (uploaded_file or pasted_text.strip()):
                     # 保存文件
-                    user_dir = Path(f"data/user_materials/{user_id}")
-                    user_dir.mkdir(parents=True, exist_ok=True)
-                    file_path = user_dir / uploaded_file.name
-                    file_path.write_bytes(uploaded_file.getvalue())
+                    file_path = ""
+                    file_bytes = None
+                    filename = "pasted_text.txt"
+                    file_type = "pasted_text"
+                    if uploaded_file:
+                        user_dir = Path(f"data/user_materials/{user_id}")
+                        user_dir.mkdir(parents=True, exist_ok=True)
+                        file_path_obj = user_dir / uploaded_file.name
+                        file_bytes = uploaded_file.getvalue()
+                        file_path_obj.write_bytes(file_bytes)
+                        file_path = str(file_path_obj)
+                        filename = uploaded_file.name
+                        file_type = uploaded_file.name.rsplit(".", 1)[-1].lower() if "." in uploaded_file.name else "unknown"
 
                     # 记录到数据库
-                    file_type = uploaded_file.name.rsplit(".", 1)[-1].lower() if "." in uploaded_file.name else "unknown"
                     conn = sqlite3.connect(MEMORY_DB)
                     c = conn.cursor()
                     c.execute("""INSERT INTO user_materials
                         (user_id, subject, filename, chapter_name, file_path, file_type, processing_status)
                         VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-                        (user_id, selected_subject, uploaded_file.name, chapter_name.strip(), str(file_path), file_type))
+                        (user_id, selected_subject, filename, chapter_name.strip(), file_path, file_type))
                     material_id = c.lastrowid
                     conn.commit()
                     conn.close()
 
-                    # OCR 识别
-                    content = ""
-                    if file_type == "txt":
-                        content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
+                    spinner_text = "正在处理资料..."
+                    if pasted_text.strip():
+                        spinner_text = "正在整理粘贴文本..."
                     elif file_type == "pdf":
-                        if check_umiocr_available():
-                            with st.spinner("正在用 umi-ocr 识别 PDF..."):
-                                content = extract_text_from_pdf_umiocr(file_path)
-                        else:
-                            with st.spinner("正在解析 PDF..."):
-                                content = extract_text_from_pdf(file_path)
+                        spinner_text = "正在解析 PDF，并按需回退 OCR..."
                     elif file_type in ("png", "jpg", "jpeg"):
-                        with st.spinner("正在识别图片..."):
-                            content = extract_text_from_image(uploaded_file.getvalue())
+                        spinner_text = "正在识别图片..."
+                    elif file_type == "txt":
+                        spinner_text = "正在整理 TXT 文本..."
 
-                    st.session_state._ocr_preview = content
+                    with st.spinner(spinner_text):
+                        material_result = route_material_input(
+                            file_name=filename,
+                            file_path=file_path,
+                            file_bytes=file_bytes,
+                            pasted_text=pasted_text,
+                            image_ocr_fn=extract_text_from_image,
+                            pdf_ocr_fn=extract_text_from_pdf_umiocr,
+                            pdf_ocr_available=check_umiocr_available() if file_type == "pdf" else False,
+                        )
+
+                    st.session_state._material_result = material_result.to_dict()
+                    st.session_state._ocr_preview = material_result.extracted_text
                     st.session_state._ocr_material_id = material_id
                     st.session_state._ocr_chapter = chapter_name.strip()
                     st.session_state._ocr_subject = selected_subject
@@ -503,11 +524,22 @@ def render_knowledge_page():
             chapter_name = st.session_state._ocr_chapter
             selected_subject = st.session_state._ocr_subject
             file_type = st.session_state._ocr_file_type
+            material_result = st.session_state.get("_material_result", {})
 
             st.markdown("---")
             st.subheader("📝 识别结果预览")
 
             st.caption(f"识别文字：{len(ocr_text)} 字 | 章节：{chapter_name}")
+            if material_result:
+                st.caption(
+                    f"source_type: {material_result.get('source_type', 'unknown')} | "
+                    f"process_method: {material_result.get('process_method', 'unknown')} | "
+                    f"confidence: {material_result.get('confidence', 0.0):.2f}"
+                )
+                warnings = material_result.get("warnings") or []
+                if warnings:
+                    for warning in warnings:
+                        st.warning(warning)
 
             edited_text = st.text_area(
                 "识别结果（可编辑，修正识别错误后点击确认）",
@@ -533,6 +565,8 @@ def render_knowledge_page():
                                 del st.session_state._ocr_chapter
                                 del st.session_state._ocr_subject
                                 del st.session_state._ocr_file_type
+                                if "_material_result" in st.session_state:
+                                    del st.session_state._material_result
                                 st.success(f"✅ 上传成功！提取了 {count} 个知识点。")
                                 st.rerun()
                             except Exception as e:
@@ -547,6 +581,8 @@ def render_knowledge_page():
                     del st.session_state._ocr_chapter
                     del st.session_state._ocr_subject
                     del st.session_state._ocr_file_type
+                    if "_material_result" in st.session_state:
+                        del st.session_state._material_result
                     st.rerun()
 
         # 已上传资料列表
