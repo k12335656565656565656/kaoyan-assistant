@@ -25,6 +25,8 @@ from dotenv import load_dotenv
 from docx import Document
 from docx.shared import Pt
 
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
 # Monkey-patch Streamlit 的 CachedWidgetWarning 检测（CookieManager 在 @st.cache_resource 中需要）
 import streamlit.elements.lib.policies as _policies
 import streamlit.components.v1.custom_component as _cc
@@ -35,8 +37,8 @@ _cc.check_cache_replay_rules = lambda: None
 st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
-API_BASE = "https://api.xiaomimimo.com/v1"
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
+API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip()
 MODEL_NAME = "mimo-v2.5"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 

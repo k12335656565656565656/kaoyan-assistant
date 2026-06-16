@@ -61,7 +61,7 @@
 | **LLM 调用** | urllib.request 直连 API | 零外部SDK依赖 |
 | **数据库** | SQLite (sqlite3) | 多用户隔离，零配置 |
 | **检索** | 纯Python关键词匹配 | 无jieba/sklearn依赖 |
-| **唯一依赖** | `streamlit>=1.28.0` | 其余全部Python标准库 |
+| **Python依赖** | Streamlit + 文档/OCR相关依赖 | 详见 `requirements.txt` |
 
 ---
 
@@ -103,10 +103,12 @@
 ```bash
 pip install -r requirements.txt
 ```
-唯一依赖：`streamlit>=1.28.0`，其余全部 Python 标准库。
+当前依赖以 `requirements.txt` 为准，包含 `streamlit`、`extra-streamlit-components`、`python-docx`、`lxml`、`python-dotenv`、`PyMuPDF`、`requests`。
 
 ### 4.3 配置 API Key
 ```bash
+# 可选：先复制 .env.example 为 .env，再填写 AI_API_KEY
+
 # Windows CMD
 set AI_API_KEY=sk-your-key
 
@@ -115,6 +117,15 @@ $env:AI_API_KEY="sk-your-key"
 
 # Linux / Mac
 export AI_API_KEY="sk-your-key"
+```
+
+也支持 `.env` 文件：
+
+```env
+AI_API_KEY=sk-your-key
+AI_API_BASE=https://api.xiaomimimo.com/v1
+UMI_OCR_URL=http://localhost:1224
+MEMORY_DB=data/memory.db
 ```
 
 ### 4.4 运行应用

@@ -11,7 +11,7 @@
 pip install -r requirements.txt
 ```
 
-唯一依赖是 `streamlit`，其余全部使用 Python 标准库。
+当前依赖以 `requirements.txt` 为准，其中还包括 `extra-streamlit-components`、`python-docx`、`lxml`、`python-dotenv`、`PyMuPDF`、`requests`。
 
 ## 2. 配置 API Key
 
@@ -30,10 +30,13 @@ $env:AI_API_KEY="sk-your-key-here"
 export AI_API_KEY="sk-your-key-here"
 ```
 
+也可以复制 `.env.example` 为 `.env` 后直接填写。
+
 可选配置：
 ```bash
-export AI_API_BASE="https://aiberm.com/v1"  # 默认
-export AI_MODEL="gpt-4o"                     # 默认
+export AI_API_BASE="https://api.xiaomimimo.com/v1"
+export UMI_OCR_URL="http://localhost:1224"
+export MEMORY_DB="data/memory.db"
 ```
 
 ## 3. 启动

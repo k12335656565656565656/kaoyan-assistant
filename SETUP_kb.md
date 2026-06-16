@@ -30,9 +30,11 @@ $env:AI_API_KEY="your-api-key-here"
 export AI_API_KEY="your-api-key-here"
 ```
 
+也可以复制 `.env.example` 为 `.env` 后直接填写。
+
 可选配置（有默认值）：
 ```bash
-export AI_API_BASE="https://api.z.ai/api/coding/paas/v4"  # API地址
+export AI_API_BASE="https://api.xiaomimimo.com/v1"        # API地址
 export MEMORY_DB="data/memory.db"                          # 数据库路径
 export UMI_OCR_URL="http://localhost:1224"                 # 本地OCR服务
 ```
