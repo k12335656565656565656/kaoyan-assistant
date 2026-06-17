@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
+from repositories.knowledge_repo import ensure_knowledge_schema, save_confirmed_knowledge_points
 from schemas.knowledge_schema import (
     knowledge_point_to_dict,
     normalize_knowledge_point_draft,
@@ -85,6 +86,8 @@ def init_knowledge_db(conn):
         mastered INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
+
+    ensure_knowledge_schema(conn)
 
 
 def ensure_db():
@@ -543,8 +546,20 @@ def _clear_current_draft_session():
     st.session_state["confirmed_knowledge_drafts"] = []
     st.session_state["deleted_knowledge_draft_count"] = 0
     st.session_state["knowledge_draft_warnings"] = []
+    st.session_state["persisted_knowledge_count"] = 0
+    st.session_state["last_persisted_knowledge_names"] = []
+    st.session_state["persisted_confirmed_knowledge_ids"] = []
     st.session_state["_draft_knowledge_points"] = []
     st.session_state["_draft_knowledge_warnings"] = []
+
+
+def _ensure_persist_state():
+    if "persisted_knowledge_count" not in st.session_state:
+        st.session_state["persisted_knowledge_count"] = 0
+    if "last_persisted_knowledge_names" not in st.session_state:
+        st.session_state["last_persisted_knowledge_names"] = []
+    if "persisted_confirmed_knowledge_ids" not in st.session_state:
+        st.session_state["persisted_confirmed_knowledge_ids"] = []
 
 
 # ==================== UI 渲染 ====================
@@ -553,6 +568,7 @@ def render_knowledge_page():
     """渲染专业知识库页面（4 个 Tab）"""
     user_id = st.session_state.get("user_id", 1)
     _ensure_session_draft_state()
+    _ensure_persist_state()
 
     if not API_KEY:
         st.error("⚠️ 未设置 API Key。请设置环境变量 `AI_API_KEY` 后重启。")
@@ -671,6 +687,7 @@ def render_knowledge_page():
                     st.session_state._ocr_chapter = chapter_name.strip()
                     st.session_state._ocr_subject = selected_subject
                     st.session_state._ocr_file_type = file_type
+                    st.session_state._ocr_filename = filename
                     st.rerun()
 
         # OCR 预览区域
@@ -736,6 +753,8 @@ def render_knowledge_page():
                     del st.session_state._ocr_chapter
                     del st.session_state._ocr_subject
                     del st.session_state._ocr_file_type
+                    if "_ocr_filename" in st.session_state:
+                        del st.session_state._ocr_filename
                     if "_material_result" in st.session_state:
                         del st.session_state._material_result
                     _clear_current_draft_session()
@@ -745,6 +764,7 @@ def render_knowledge_page():
             draft_warnings = st.session_state.get("knowledge_draft_warnings") or []
             confirmed_drafts = st.session_state.get("confirmed_knowledge_drafts") or []
             deleted_count = st.session_state.get("deleted_knowledge_draft_count", 0)
+            persisted_ids = set(st.session_state.get("persisted_confirmed_knowledge_ids") or [])
             if draft_points:
                 st.markdown("---")
                 st.subheader("🧩 候选知识点草稿确认区")
@@ -833,10 +853,61 @@ def render_knowledge_page():
             if confirmed_drafts:
                 st.markdown("---")
                 st.subheader("✅ 本次已确认知识点")
+                unsaved_confirmed = [point for point in confirmed_drafts if point.get("_draft_id") not in persisted_ids]
+                save_col1, save_col2 = st.columns([3, 2])
+                with save_col1:
+                    if st.button("💾 保存已确认知识点到私有知识库", use_container_width=True, key="persist_confirmed_knowledge"):
+                        if not unsaved_confirmed:
+                            st.warning("暂无已确认知识点可保存。")
+                        else:
+                            conn = sqlite3.connect(MEMORY_DB)
+                            try:
+                                material_meta = {
+                                    "material_id": material_id,
+                                    "subject": selected_subject,
+                                    "chapter_name": chapter_name,
+                                    "source_type": material_result.get("source_type", "") if material_result else "",
+                                    "process_method": material_result.get("process_method", "") if material_result else "",
+                                    "material_filename": st.session_state.get("_ocr_filename", ""),
+                                }
+                                saved_count = save_confirmed_knowledge_points(
+                                    conn,
+                                    user_id,
+                                    unsaved_confirmed,
+                                    material_meta=material_meta,
+                                )
+                                conn.commit()
+                                st.session_state["persisted_knowledge_count"] = saved_count
+                                st.session_state["last_persisted_knowledge_names"] = [
+                                    point.get("knowledge_name", "") for point in unsaved_confirmed
+                                ]
+                                st.session_state["persisted_confirmed_knowledge_ids"] = list(
+                                    persisted_ids.union({point.get("_draft_id") for point in unsaved_confirmed})
+                                )
+                                st.success(f"已保存 {saved_count} 条知识点到私有知识库。")
+                                st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"保存失败：{e}")
+                            finally:
+                                conn.close()
+                with save_col2:
+                    st.caption(f"待保存确认项：{len(unsaved_confirmed)}")
+
+                if st.session_state.get("persisted_knowledge_count"):
+                    st.caption(
+                        f"最近一次已保存 {st.session_state.get('persisted_knowledge_count', 0)} 条："
+                        f"{'、'.join(st.session_state.get('last_persisted_knowledge_names') or [])}"
+                    )
+
                 for idx, point in enumerate(confirmed_drafts, start=1):
                     title = point.get("knowledge_name") or f"已确认知识点 {idx}"
                     ktype = point.get("knowledge_type") or "未标注类型"
                     with st.expander(f"{idx}. {title} | {ktype}"):
+                        if point.get("_draft_id") in persisted_ids:
+                            st.caption("已保存到私有知识库")
+                        else:
+                            st.caption("尚未保存到私有知识库")
                         st.markdown(f"**核心定义**：{point.get('core_definition') or '未提取'}")
                         st.markdown(f"**原文依据**：{point.get('source_text') or '未提取'}")
                         st.markdown(f"**标签**：{', '.join(point.get('tags') or []) or '未提取'}")
