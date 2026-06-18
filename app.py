@@ -2336,9 +2336,10 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3):
     raise last_error
 
 
-def _clean_mimo_output(raw_text, prompt="", used_reasoning=False):
+def _clean_mimo_output(raw_text, prompt="", used_reasoning=False, mode="qa"):
     """清洗 MiMo 思维链输出：优先找答案起始标记 → 行过滤 → 编号行兜底
-    used_reasoning=True 表示 content 为空、全量回退到 reasoning_content"""
+    used_reasoning=True 表示 content 为空、全量回退到 reasoning_content
+    mode='qa' 问答模式（激进过滤），mode='material' 文档模式（保护教学内容）"""
     if not raw_text or len(raw_text) < 5:
         return raw_text
     text = raw_text.strip()
@@ -2347,45 +2348,60 @@ def _clean_mimo_output(raw_text, prompt="", used_reasoning=False):
         text = text[len(prompt.strip()):].strip()
 
     # === 核心策略：优先找「答案起始」标记，截取之后的内容 ===
-    _answer_markers = (
-        # 中文答案标记
-        '正式回答', '给出答案', '输出如下', '答案如下', '解答如下',
-        '最终答案', '回答如下', '现在回答', '开始答题',
-        # 结构化标记（来自 prompt 的 format 要求）
-        '[题目]', '[解答]', '[答案]',
-        # 英文
-        'Answer:', 'Solution:', 'Here is',
-    )
-    best_marker_pos = len(text) + 1  # 取最早出现的标记（最小位置）
-    for marker in _answer_markers:
-        pos = text.find(marker)
-        if pos != -1 and pos < best_marker_pos:
-            best_marker_pos = pos
-    if best_marker_pos < len(text) and best_marker_pos > 0:
-        # 从标记所在行开始截取
-        line_start = text.rfind('\n', 0, best_marker_pos)
-        text = text[line_start + 1:] if line_start != -1 else text[best_marker_pos:]
+    if mode != "material":
+        _answer_markers = (
+            # 中文答案标记
+            '正式回答', '给出答案', '输出如下', '答案如下', '解答如下',
+            '最终答案', '回答如下', '现在回答', '开始答题',
+            # 结构化标记（来自 prompt 的 format 要求）
+            '[题目]', '[解答]', '[答案]',
+            # 英文
+            'Answer:', 'Solution:', 'Here is',
+        )
+        best_marker_pos = len(text) + 1  # 取最早出现的标记（最小位置）
+        for marker in _answer_markers:
+            pos = text.find(marker)
+            if pos != -1 and pos < best_marker_pos:
+                best_marker_pos = pos
+        if best_marker_pos < len(text) and best_marker_pos > 0:
+            # 从标记所在行开始截取
+            line_start = text.rfind('\n', 0, best_marker_pos)
+            text = text[line_start + 1:] if line_start != -1 else text[best_marker_pos:]
 
     # === 行级过滤 ===
-    _think_starts = (
-        '好的', '让我', '首先', '根据', '综上', '因此', '注意', '这个', '该知',
-        '我们', '需要', '可以', '这里', '现在', '接下来', '最后', '总的', '所以',
-        'Okay', 'Let', 'First', 'I need', 'The user',
-        '用户', '问题是', '题目是', '要解', '已知', '分析', '考虑', '理解',
-        '回顾', '判断', '比较', '计算', '推导', '综合', '综上所',
-        '让我来', '我来', '我明白', '收到', '嗯，', '嗯,', '好，', '好,',
-        '首先，', '接下来，', '最后，', '然后，', '接着，',
-        '根据题目', '从题目', '由题意', '观察', '对比', '得到',
-        # 更激进的过滤
-        '这道题', '此题', '该题', '本题', '考察', '涉及', '属于',
-        '目的是', '目标是', '任务是', '要求是',
-    )
-    _think_keywords = (
-        '知识点是', '用户要求', '定义如下', '给出答案', '任务是', '需要生成',
-        '我的思考', '思路如下', '步骤是', '解题思路', '推理过程',
-        '思考过程', '分析如下', '详细说明', '解释如下',
-        '我来分析', '逐步思考', '逐步分析',
-    )
+    if mode == "material":
+        # 文档模式：只过滤明显的元对话，保护正常教学内容
+        _think_starts = (
+            '好的', '让我来', '我来', '我明白', '收到', '嗯，', '嗯,', '好，', '好,',
+            'Okay', 'Let', 'First', 'I need', 'The user',
+            '用户', '问题是', '题目是',
+            '这道题', '此题', '该题', '本题',
+        )
+        _think_keywords = (
+            '用户要求', '我的思考', '思路如下', '思考过程',
+            '我来分析', '逐步思考', '逐步分析', '需要生成',
+        )
+    else:
+        # 问答模式：激进过滤，保证答案纯净
+        _think_starts = (
+            '好的', '让我', '首先', '根据', '综上', '因此', '注意', '这个', '该知',
+            '我们', '需要', '可以', '这里', '现在', '接下来', '最后', '总的', '所以',
+            'Okay', 'Let', 'First', 'I need', 'The user',
+            '用户', '问题是', '题目是', '要解', '已知', '分析', '考虑', '理解',
+            '回顾', '判断', '比较', '计算', '推导', '综合', '综上所',
+            '让我来', '我来', '我明白', '收到', '嗯，', '嗯,', '好，', '好,',
+            '首先，', '接下来，', '最后，', '然后，', '接着，',
+            '根据题目', '从题目', '由题意', '观察', '对比', '得到',
+            # 更激进的过滤
+            '这道题', '此题', '该题', '本题', '考察', '涉及', '属于',
+            '目的是', '目标是', '任务是', '要求是',
+        )
+        _think_keywords = (
+            '知识点是', '用户要求', '定义如下', '给出答案', '任务是', '需要生成',
+            '我的思考', '思路如下', '步骤是', '解题思路', '推理过程',
+            '思考过程', '分析如下', '详细说明', '解释如下',
+            '我来分析', '逐步思考', '逐步分析',
+        )
     lines = text.split('\n')
     total_lines = len(lines)
     clean_lines = []
@@ -2413,33 +2429,38 @@ def _clean_mimo_output(raw_text, prompt="", used_reasoning=False):
                            False, True, filtered_reasons)
         return text  # 全被过滤了，返回原文
 
-    # === 找第一个编号行 ===
-    start_idx = 0
-    for i, line in enumerate(clean_lines):
-        if re.match(r'^\d+[\.\、\)\)]\s', line.strip()):
-            start_idx = i
-            break
-    result_lines = clean_lines[start_idx:]
+    if mode == "material":
+        # 文档模式：跳过编号锚点/推理兜底/截断，完整保留内容
+        result_lines = clean_lines
+        was_truncated = False
+    else:
+        # === 找第一个编号行 ===
+        start_idx = 0
+        for i, line in enumerate(clean_lines):
+            if re.match(r'^\d+[\.\、\)\)]\s', line.strip()):
+                start_idx = i
+                break
+        result_lines = clean_lines[start_idx:]
 
-    # === reasoning 回退时的强力兜底 ===
-    think_ratio = think_line_count / max(total_lines, 1)
-    if used_reasoning and think_ratio > 0.4:
-        # 优先提取编号行；没有则取非空行
-        numbered = [l for l in clean_lines if re.match(r'^\d+[\.\、\)\)]', l.strip())]
-        if numbered:
-            result_lines = numbered
-            filtered_reasons.append("reasoning_fb: 编号行兜底")
-        else:
-            # 取后 50% 的行（思维链通常在前半部分）
-            non_empty = [l for l in clean_lines if l.strip()]
-            half = max(1, len(non_empty) // 2)
-            result_lines = non_empty[-half:]
-            filtered_reasons.append("reasoning_fb: 后半段兜底")
+        # === reasoning 回退时的强力兜底 ===
+        think_ratio = think_line_count / max(total_lines, 1)
+        if used_reasoning and think_ratio > 0.4:
+            # 优先提取编号行；没有则取非空行
+            numbered = [l for l in clean_lines if re.match(r'^\d+[\.\、\)\)]', l.strip())]
+            if numbered:
+                result_lines = numbered
+                filtered_reasons.append("reasoning_fb: 编号行兜底")
+            else:
+                # 取后 50% 的行（思维链通常在前半部分）
+                non_empty = [l for l in clean_lines if l.strip()]
+                half = max(1, len(non_empty) // 2)
+                result_lines = non_empty[-half:]
+                filtered_reasons.append("reasoning_fb: 后半段兜底")
 
-    # === 截断保护（仅极端情况，正常输出应完整保留）===
-    was_truncated = len(result_lines) > 80
-    if was_truncated:
-        result_lines = result_lines[:60]
+        # === 截断保护（仅极端情况，正常输出应完整保留）===
+        was_truncated = len(result_lines) > 80
+        if was_truncated:
+            result_lines = result_lines[:60]
 
     _record_clean_stats(total_lines, total_lines - len(clean_lines), start_idx,
                        len(result_lines), was_truncated, all_filtered, filtered_reasons,
@@ -3143,11 +3164,18 @@ def _generate_material(prompt):
         with urllib.request.urlopen(req, timeout=300) as resp:
             msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
         reasoning = msg.get("reasoning_content") or ""
-        content = _extract_content(msg)
+        raw_content = _extract_content(msg)
         # 如果模型不区分思考/结果，则全部作为结果
-        if not content and reasoning:
-            content = reasoning
+        content_is_empty = not raw_content
+        if content_is_empty and reasoning:
+            raw_content = reasoning
             reasoning = ""
+        # 清洗 MiMo 思维链残留（文档模式：保护正常教学内容，只过滤元对话）
+        content = _clean_mimo_output(
+            raw_content, prompt=prompt,
+            used_reasoning=content_is_empty,
+            mode="material"
+        )
         return reasoning, content
     except Exception as e:
         raise RuntimeError(f"AI 调用失败: {e}")
