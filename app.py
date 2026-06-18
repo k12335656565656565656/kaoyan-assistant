@@ -3165,18 +3165,11 @@ def _generate_material(prompt):
         with urllib.request.urlopen(req, timeout=300) as resp:
             msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
         reasoning = msg.get("reasoning_content") or ""
-        raw_content = _extract_content(msg)
+        content = _extract_content(msg)
         # 如果模型不区分思考/结果，则全部作为结果
-        content_is_empty = not raw_content
-        if content_is_empty and reasoning:
-            raw_content = reasoning
+        if not content and reasoning:
+            content = reasoning
             reasoning = ""
-        # 清洗 MiMo 思维链残留（文档模式：保护正常教学内容，只过滤元对话）
-        content = _clean_mimo_output(
-            raw_content, prompt=prompt,
-            used_reasoning=content_is_empty,
-            mode="material"
-        )
         return reasoning, content
     except Exception as e:
         raise RuntimeError(f"AI 调用失败: {e}")
