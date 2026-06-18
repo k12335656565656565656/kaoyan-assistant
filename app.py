@@ -2429,13 +2429,14 @@ def _clean_mimo_output(raw_text, prompt="", used_reasoning=False, mode="qa"):
                            False, True, filtered_reasons)
         return text  # 全被过滤了，返回原文
 
+    start_idx = 0
+    think_ratio = 0.0
     if mode == "material":
         # 文档模式：跳过编号锚点/推理兜底/截断，完整保留内容
         result_lines = clean_lines
         was_truncated = False
     else:
         # === 找第一个编号行 ===
-        start_idx = 0
         for i, line in enumerate(clean_lines):
             if re.match(r'^\d+[\.\、\)\)]\s', line.strip()):
                 start_idx = i
