@@ -37,5 +37,4 @@ jobs:
             professional_knowledge \
             repositories \
             schemas \
-            services \
-            tests
+            services

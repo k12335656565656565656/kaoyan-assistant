@@ -4096,6 +4096,16 @@ if st.session_state.page == "checkin":
 
         # 自动判断当前阶段
         current_phase = determine_phase()
+        phase_rows_html = "".join(
+            (
+                f"<tr style=\"background:{'#eef2ff' if current_phase == phase else ('#fff' if index % 2 == 0 else '#f8fafc')}\">"
+                f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{phase}</td>"
+                f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{period}</td>"
+                f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{focus}</td>"
+                "</tr>"
+            )
+            for index, (phase, period, focus) in enumerate(build_phase_guide_rows())
+        )
 
         # 阶段说明卡片
         st.markdown(f"""
@@ -4107,14 +4117,7 @@ if st.session_state.page == "checkin":
                     <th style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px); text-align:left;">时间</th>
                     <th style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px); text-align:left;">核心任务</th>
                 </tr>
-                {''.join([
-                    f"<tr style=\"background:{'#eef2ff' if current_phase == phase else ('#fff' if index % 2 == 0 else '#f8fafc')}\">"
-                    f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{phase}</td>"
-                    f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{period}</td>"
-                    f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{focus}</td>"
-                    f"</tr>"
-                    for index, (phase, period, focus) in enumerate(build_phase_guide_rows())
-                ])}
+                {phase_rows_html}
             </table>
         </div>
         """, unsafe_allow_html=True)
