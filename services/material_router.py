@@ -1,8 +1,42 @@
 from pathlib import Path
 
 from schemas.material_schema import MaterialResult
+from services.material_cleaner import clean_material_for_extraction
 from services.pdf_text_service import extract_pdf_text
-from services.text_quality import analyze_text_quality, clean_material_text
+from services.text_quality import analyze_text_quality, clean_material_text, merge_pdf_risk_into_quality
+
+
+def _prepare_extraction_text(text):
+    cleaned = clean_material_text(text)
+    return clean_material_for_extraction(cleaned)
+
+
+def _build_material_result(
+    *,
+    source_type,
+    process_method,
+    raw_text,
+    confidence,
+    warnings,
+    clean_result,
+    page_count=0,
+    empty_page_count=0,
+    pdf_diagnostics=None,
+    ocr_report=None,
+):
+    return MaterialResult(
+        source_type=source_type,
+        process_method=process_method,
+        extracted_text=clean_result.cleaned_text,
+        confidence=confidence,
+        warnings=list(warnings or []),
+        raw_extracted_text=raw_text or "",
+        page_count=page_count or 0,
+        empty_page_count=empty_page_count or 0,
+        pdf_diagnostics=pdf_diagnostics or {},
+        ocr_report=ocr_report or {},
+        clean_report=clean_result.to_dict(),
+    )
 
 
 def route_material_input(
@@ -17,16 +51,17 @@ def route_material_input(
 ):
     pasted_text = pasted_text or ""
     if pasted_text.strip():
-        cleaned = clean_material_text(pasted_text)
-        warnings = []
-        if len(cleaned) < 80:
+        clean_result = _prepare_extraction_text(pasted_text)
+        warnings = list(clean_result.warnings)
+        if len(clean_result.cleaned_text) < 80:
             warnings.append("粘贴文本较短，请确认内容完整")
-        return MaterialResult(
+        return _build_material_result(
             source_type="pasted_text",
             process_method="pasted_text",
-            extracted_text=cleaned,
-            confidence=0.98 if cleaned else 0.0,
+            raw_text=pasted_text,
+            confidence=0.98 if clean_result.cleaned_text else 0.0,
             warnings=warnings,
+            clean_result=clean_result,
         )
 
     suffix = Path(file_name or "").suffix.lower()
@@ -34,72 +69,110 @@ def route_material_input(
         decoded = ""
         if file_bytes:
             decoded = file_bytes.decode("utf-8", errors="ignore")
-        cleaned = clean_material_text(decoded)
-        warnings = ["当前输入来自 txt 文件，按直接文本处理"]
-        if len(cleaned) < 80:
+        clean_result = _prepare_extraction_text(decoded)
+        warnings = ["当前输入来自 txt 文件，按直接文本处理"] + list(clean_result.warnings)
+        if len(clean_result.cleaned_text) < 80:
             warnings.append("文本较短，请确认内容完整")
-        return MaterialResult(
+        return _build_material_result(
             source_type="pasted_text",
             process_method="pasted_text",
-            extracted_text=cleaned,
-            confidence=0.95 if cleaned else 0.0,
+            raw_text=decoded,
+            confidence=0.95 if clean_result.cleaned_text else 0.0,
             warnings=warnings,
+            clean_result=clean_result,
         )
 
     if suffix == ".pdf" and file_path:
         pdf_data = extract_pdf_text(file_path)
-        quality = analyze_text_quality(
+        quality = merge_pdf_risk_into_quality(
+            analyze_text_quality(
             pdf_data["text"],
             page_count=pdf_data["page_count"],
             empty_page_count=pdf_data["empty_page_count"],
+            ),
+            pdf_data.get("pdf_diagnostics"),
         )
         if quality["acceptable"]:
-            return MaterialResult(
+            clean_result = _prepare_extraction_text(quality["cleaned_text"])
+            return _build_material_result(
                 source_type="pdf",
                 process_method="pdf_text_extract",
-                extracted_text=quality["cleaned_text"],
+                raw_text=quality["cleaned_text"],
                 confidence=quality["confidence"],
-                warnings=quality["warnings"],
+                warnings=quality["warnings"] + clean_result.warnings,
+                clean_result=clean_result,
+                page_count=pdf_data["page_count"],
+                empty_page_count=pdf_data["empty_page_count"],
+                pdf_diagnostics=quality.get("pdf_diagnostics"),
             )
 
         warnings = list(quality["warnings"])
         warnings.append("PDF 直接提取质量较低，尝试 OCR 回退")
         if pdf_ocr_available and pdf_ocr_fn:
-            ocr_text = clean_material_text(pdf_ocr_fn(file_path))
-            return MaterialResult(
+            ocr_report = {}
+            try:
+                ocr_output = pdf_ocr_fn(file_path)
+                if isinstance(ocr_output, tuple):
+                    raw_ocr_text, ocr_report = ocr_output
+                else:
+                    raw_ocr_text = ocr_output
+                clean_result = _prepare_extraction_text(raw_ocr_text)
+            except Exception as exc:
+                warnings.append(f"OCR 回退失败：{exc}")
+                raw_ocr_text = ""
+                clean_result = _prepare_extraction_text("")
+            return _build_material_result(
                 source_type="pdf",
                 process_method="pdf_ocr",
-                extracted_text=ocr_text,
-                confidence=0.65 if ocr_text else 0.0,
-                warnings=warnings,
+                raw_text=raw_ocr_text,
+                confidence=0.65 if clean_result.cleaned_text else 0.0,
+                warnings=warnings + clean_result.warnings,
+                clean_result=clean_result,
+                page_count=pdf_data["page_count"],
+                empty_page_count=pdf_data["empty_page_count"],
+                pdf_diagnostics=quality.get("pdf_diagnostics"),
+                ocr_report=ocr_report,
             )
 
         warnings.append("OCR 服务不可用，已保留直接提取结果")
-        return MaterialResult(
+        clean_result = _prepare_extraction_text(quality["cleaned_text"])
+        return _build_material_result(
             source_type="pdf",
             process_method="pdf_text_extract",
-            extracted_text=quality["cleaned_text"],
+            raw_text=quality["cleaned_text"],
             confidence=quality["confidence"],
-            warnings=warnings,
+            warnings=warnings + clean_result.warnings,
+            clean_result=clean_result,
+            page_count=pdf_data["page_count"],
+            empty_page_count=pdf_data["empty_page_count"],
+            pdf_diagnostics=quality.get("pdf_diagnostics"),
         )
 
     if suffix in {".png", ".jpg", ".jpeg"} and file_bytes and image_ocr_fn:
-        extracted_text = clean_material_text(image_ocr_fn(file_bytes))
         warnings = []
-        if len(extracted_text) < 40:
+        try:
+            raw_text = image_ocr_fn(file_bytes)
+            clean_result = _prepare_extraction_text(raw_text)
+        except Exception as exc:
+            raw_text = ""
+            clean_result = _prepare_extraction_text("")
+            warnings.append(f"图片 OCR 失败：{exc}")
+        if len(clean_result.cleaned_text) < 40:
             warnings.append("图片 OCR 结果较短，请人工确认")
-        return MaterialResult(
+        return _build_material_result(
             source_type="image",
             process_method="image_ocr",
-            extracted_text=extracted_text,
-            confidence=0.75 if extracted_text else 0.0,
-            warnings=warnings,
+            raw_text=raw_text,
+            confidence=0.75 if clean_result.cleaned_text else 0.0,
+            warnings=warnings + clean_result.warnings,
+            clean_result=clean_result,
         )
 
-    return MaterialResult(
+    return _build_material_result(
         source_type="pasted_text",
         process_method="pasted_text",
-        extracted_text="",
+        raw_text="",
         confidence=0.0,
         warnings=["未识别到可处理的资料输入"],
+        clean_result=_prepare_extraction_text(""),
     )

@@ -96,12 +96,24 @@
 
 ## 4. 快速启动指南
 
+### 4.0 独立工程说明
+
+当前工程应当作为**可独立运行、可独立开发**的项目使用，不依赖工作区外部同级目录。
+
+以下目录如果在原作者机器上出现，只视为历史参考或额外资料来源，不是运行前提：
+
+- `cskaoyan-master`
+- `408-rag`
+- `andrej-karpathy-skills`
+
+如果需要补充测试样本，请优先放入项目内的 `data/test_materials/`，不要在代码、测试或文档中写死对这些同级目录的依赖。
+
 ### 4.1 环境要求
 - Python 3.10+
 
 ### 4.2 安装依赖
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 当前依赖以 `requirements.txt` 为准，包含 `streamlit`、`extra-streamlit-components`、`python-docx`、`lxml`、`python-dotenv`、`PyMuPDF`、`requests`。
 
@@ -129,11 +141,11 @@ MEMORY_DB=data/memory.db
 ```
 
 ### 4.4 运行应用
-双击 `启动.bat`（Windows），或：
+双击 `启动.bat`（Windows 主站，默认 `8505`）或 `启动知识库.bat`（Windows 知识库页，默认 `8501`），或：
 ```bash
-streamlit run app.py --server.port 8501 --server.fileWatcherType none
+python -m streamlit run app.py --server.port 8505 --server.fileWatcherType none
 ```
-浏览器打开 http://localhost:8501
+浏览器打开 http://localhost:8505
 
 ---
 
@@ -933,7 +945,7 @@ skills/
 ### 架构
 
 ```
-主站 (8501)         后台 (8502)
+主站 (8505)         后台 (8502)
 ────────           ────────
 app.py              admin.py
 多人登录            单独密码

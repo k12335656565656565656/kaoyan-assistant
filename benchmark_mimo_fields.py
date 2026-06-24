@@ -1,8 +1,9 @@
 """MiMo API 字段检测 — 验证 content vs reasoning_content"""
 import json, urllib.request, time
+import os
 
-API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
-API_BASE = "https://api.xiaomimimo.com/v1"
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
+API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip()
 
 def test_api(prompt, stream=False):
     data = {
@@ -75,6 +76,9 @@ def test_api(prompt, stream=False):
             }
 
 if __name__ == "__main__":
+    if not API_KEY:
+        raise SystemExit("请先设置 AI_API_KEY 环境变量。")
+
     print("=" * 60)
     print("MiMo API Response Field Analysis")
     print("=" * 60)

@@ -25,6 +25,8 @@ STRUCTURED_COLUMNS = {
     "process_method": "TEXT",
     "material_filename": "TEXT",
     "status": "TEXT",
+    "review_content": "TEXT",
+    "review_generated_at": "TEXT",
     "updated_at": "TEXT",
 }
 
@@ -166,3 +168,15 @@ def list_user_knowledge_points(conn, user_id, limit=100):
     rows = c.fetchall()
     column_names = [desc[0] for desc in c.description]
     return [dict(zip(column_names, row)) for row in rows]
+
+
+def update_knowledge_review_content(conn, knowledge_id, review_content):
+    ensure_knowledge_schema(conn)
+    conn.execute(
+        """UPDATE user_knowledge
+           SET review_content=?,
+               review_generated_at=datetime('now'),
+               updated_at=datetime('now')
+           WHERE id=?""",
+        (review_content or "", knowledge_id),
+    )

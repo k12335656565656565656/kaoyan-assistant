@@ -24,6 +24,75 @@ import extra_streamlit_components as stx
 from dotenv import load_dotenv
 from docx import Document
 from docx.shared import Pt
+from services.skill_prompt_service import build_system_prompt_with_skills, load_all_skills
+from services.llm_gateway import (
+    chat_completion_message,
+    chat_completion_text,
+    simple_prompt_completion,
+    stream_chat_completion,
+)
+from services.knowledge_match_service import (
+    build_knowledge_index as build_knowledge_index_service,
+    match_knowledge_concepts as match_knowledge_concepts_service,
+    smart_match_knowledge as smart_match_knowledge_service,
+)
+from services.math_qa_orchestrator import (
+    complete_math_qa_turn,
+    parse_multi_output as parse_multi_output_service,
+    search_corpus as search_corpus_service,
+    stream_math_qa,
+)
+from services.english_tools_service import (
+    analyze_sentence as analyze_english_sentence,
+    extract_essay_text_from_image,
+    grade_essay,
+    load_essay_topics,
+    lookup_vocab as lookup_english_vocab,
+    process_translation_exercise,
+)
+from services.checkin_planning_service import (
+    build_checkin_reminders,
+    build_checkin_plan_prompt,
+    build_flow_focus_data,
+    build_flow_message_prompt,
+    build_phase_guide_rows,
+    calculate_daily_hours as calculate_daily_hours_service,
+    determine_phase as determine_phase_service,
+    generate_plan_bundle,
+    get_subject_weights as get_subject_weights_service,
+    get_time_period as get_time_period_service,
+    pick_flow_message as pick_flow_message_service,
+    select_recovery_strategy as select_recovery_strategy_service,
+)
+from services.profile_service import (
+    build_profile_display_items,
+    build_profile_form_payload,
+    build_recommendation_profile_caption,
+    display_target_schools as display_target_schools_service,
+    persist_auto_tags,
+    profile_is_complete as profile_is_complete_service,
+    rule_extract_profile as rule_extract_profile_service,
+    safe_json_loads as safe_json_loads_service,
+    update_profile_from_conversation as update_profile_from_conversation_service,
+)
+from repositories.profile_repo import (
+    get_user_profile as get_user_profile_repo,
+    list_profile_columns as list_profile_columns_repo,
+    save_profile_field as save_profile_field_repo,
+)
+from repositories.study_plan_repo import (
+    calc_tasks_progress as calc_tasks_progress_repo,
+    calculate_progress as calculate_progress_repo,
+    delete_plan as delete_plan_repo,
+    get_checkin_plan_progress as get_checkin_plan_progress_repo,
+    get_checkin_plans as get_checkin_plans_repo,
+    get_user_tasks as get_user_tasks_repo,
+    save_checkin_plan as save_checkin_plan_repo,
+    save_plan as save_plan_repo,
+    save_task as save_task_repo,
+    update_plan_tasks as update_plan_tasks_repo,
+    update_task_status as update_task_status_repo,
+)
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -860,17 +929,7 @@ def save_document(filename, content):
         return False
 
 def search_corpus(query, corpus, top_k=3):
-    if not corpus or not query:
-        return []
-    query_lower = query.lower()
-    results = []
-    for doc in corpus:
-        text = doc["text"].lower()
-        score = sum(text.count(w) for w in query_lower.split() if w)
-        if score > 0:
-            results.append({"id": doc["id"], "score": score, "text": doc["text"][:500]})
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:top_k]
+    return search_corpus_service(query, corpus, top_k=top_k)
 
 def get_knowledge_text(kid, corpus):
     for doc in corpus:
@@ -1388,19 +1447,7 @@ def get_timeline(user_id, days=14):
     return all_items
 
 def save_checkin_plan(user_id, plan_name, target_date, tasks):
-    if isinstance(tasks, list):
-        progress = calc_tasks_progress(tasks)
-        tasks_json = json.dumps(tasks, ensure_ascii=False)
-    else:
-        progress = 0
-        tasks_json = str(tasks)
-    conn = sqlite3.connect(MEMORY_DB)
-    conn.execute(
-        """INSERT INTO checkin_plans (user_id, plan_name, target_date, tasks, progress, status)
-           VALUES (?, ?, ?, ?, ?, 'active')""",
-        (user_id, plan_name, target_date, tasks_json, progress))
-    conn.commit()
-    conn.close()
+    save_checkin_plan_repo(MEMORY_DB, user_id, plan_name, target_date, tasks)
 
 def _extract_text_from_pdf(file_path):
     """用 PyMuPDF 提取 PDF 文本（纯文本模式）"""
@@ -1483,24 +1530,17 @@ def _extract_knowledge_from_pdf_images(file_path, subject, chapter_name):
 - 如果是公式或定理，写出名称和简要含义
 - 如果没有知识点，输出「无」"""
 
-        data = {
-            "model": "mimo-v2.5",
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-            ]}],
-            "max_tokens": 1500,
-            "temperature": 0
-        }
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-            method="POST"
-        )
         try:
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
+            result = chat_completion_text(
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                ]}],
+                model="mimo-v2.5",
+                max_tokens=1500,
+                temperature=0,
+                timeout=90,
+            )
             if "无" not in result[:10]:
                 all_knowledge.append(result)
         except Exception:
@@ -1512,23 +1552,16 @@ def _extract_knowledge_from_pdf_images(file_path, subject, chapter_name):
 def _extract_text_from_image(file_bytes):
     """用 glm-4v-flash OCR 识别图片中的文字"""
     img_b64 = base64.b64encode(file_bytes).decode()
-    data = {
-        "model": "mimo-v2.5",
-        "messages": [{"role": "user", "content": [
+    return chat_completion_text(
+        messages=[{"role": "user", "content": [
             {"type": "text", "text": "请识别这张图片中的所有文字内容，只输出文字，不要添加任何说明。"},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
         ]}],
-        "max_tokens": 2000,
-        "temperature": 0
-    }
-    req = urllib.request.Request(
-        API_BASE + "/chat/completions",
-        data=json.dumps(data).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-        method="POST"
+        model="mimo-v2.5",
+        max_tokens=2000,
+        temperature=0,
+        timeout=60,
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
 
 def _extract_knowledge_from_image(file_bytes, subject, chapter_name):
     """用多模态 AI 直接从图片提取知识点"""
@@ -1549,23 +1582,16 @@ def _extract_knowledge_from_image(file_bytes, subject, chapter_name):
 - 简要说明要准确、简洁
 - 如果是公式或定理，写出名称和简要含义"""
 
-    data = {
-        "model": "mimo-v2.5",
-        "messages": [{"role": "user", "content": [
+    return chat_completion_text(
+        messages=[{"role": "user", "content": [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
         ]}],
-        "max_tokens": 2000,
-        "temperature": 0
-    }
-    req = urllib.request.Request(
-        API_BASE + "/chat/completions",
-        data=json.dumps(data).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-        method="POST"
+        model="mimo-v2.5",
+        max_tokens=2000,
+        temperature=0,
+        timeout=90,
     )
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        return _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
 
 def _extract_knowledge_from_text(content, subject, chapter_name):
     """用 LLM 从文本中提取知识点"""
@@ -1602,39 +1628,19 @@ def _save_knowledge_points(user_id, material_id, subject, chapter_name, llm_resu
     return count
 
 def get_checkin_plans(user_id):
-    return checkin_fetch_all(
-        "SELECT * FROM checkin_plans WHERE user_id=? AND status='active' ORDER BY target_date ASC, id DESC",
-        (user_id,))
+    return get_checkin_plans_repo(MEMORY_DB, user_id)
 
 def calc_tasks_progress(tasks):
-    if not tasks:
-        return 0
-    done_count = sum(1 for task in tasks if task.get("done"))
-    return round(done_count / len(tasks) * 100, 1)
+    return calc_tasks_progress_repo(tasks)
 
 def update_plan_tasks(user_id, plan_id, tasks):
-    progress = calc_tasks_progress(tasks)
-    status = "completed" if tasks and progress >= 100 else "active"
-    conn = sqlite3.connect(MEMORY_DB)
-    conn.execute(
-        "UPDATE checkin_plans SET tasks=?, progress=?, status=? WHERE id=? AND user_id=?",
-        (json.dumps(tasks, ensure_ascii=False), progress, status, plan_id, user_id))
-    conn.commit()
-    conn.close()
+    update_plan_tasks_repo(MEMORY_DB, user_id, plan_id, tasks)
 
 def delete_plan(user_id, plan_id):
-    conn = sqlite3.connect(MEMORY_DB)
-    conn.execute("UPDATE checkin_plans SET status='abandoned' WHERE id=? AND user_id=?", (plan_id, user_id))
-    conn.commit()
-    conn.close()
+    delete_plan_repo(MEMORY_DB, user_id, plan_id)
 
 def get_checkin_plan_progress(user_id):
-    rows = checkin_fetch_all(
-        "SELECT progress FROM checkin_plans WHERE user_id=? AND status='active'",
-        (user_id,))
-    if not rows:
-        return 0
-    return round(sum(float(row["progress"] or 0) for row in rows) / len(rows))
+    return get_checkin_plan_progress_repo(MEMORY_DB, user_id)
 
 def save_pomodoro(user_id, subject, duration, actual_minutes, completed):
     conn = sqlite3.connect(MEMORY_DB)
@@ -1654,29 +1660,19 @@ def get_today_pomodoros(user_id):
     return int(row["count"] or 0), int(row["minutes"] or 0)
 
 def check_checkin_reminders(user_id):
-    reminders = []
     recent_3 = checkin_fetch_all(
         """SELECT checkin_date, completion_rate FROM checkin_daily
            WHERE user_id=? ORDER BY checkin_date DESC LIMIT 3""",
         (user_id,))
-    expected_dates = [(date.today() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(3)]
-    recent_dates = [row["checkin_date"] for row in recent_3]
-    if recent_dates == expected_dates and all(float(row["completion_rate"] or 0) < 60 for row in recent_3):
-        reminders.append(("warning", "连续 3 天完成率低于 60%，建议降低任务颗粒度。"))
     last_date = get_last_checkin_date(user_id)
-    if last_date:
-        gap = (date.today() - datetime.strptime(last_date, "%Y-%m-%d").date()).days
-        if gap >= 7:
-            reminders.append(("error", f"已经 {gap} 天没有打卡了，建议今天先完成一个小任务。"))
-    else:
-        reminders.append(("info", "还没有打卡记录，先完成今天的第一次打卡。"))
     streak = get_consecutive_days(user_id)
-    if streak in {7, 21, 50, 100}:
-        reminders.append(("success", f"连续打卡 {streak} 天，已达成阶段里程碑。"))
     plan_progress = get_checkin_plan_progress(user_id)
-    if 0 < plan_progress < 80:
-        reminders.append(("warning", f"当前活跃计划平均完成率 {plan_progress}%，低于 80%，建议复盘。"))
-    return reminders
+    return build_checkin_reminders(
+        recent_records=recent_3,
+        last_date=last_date,
+        streak=streak,
+        plan_progress=plan_progress,
+    )
 
 def get_daily_goal_hours(user_id):
     """从活跃学习计划获取每日学习目标（小时），无计划时默认6小时"""
@@ -1687,279 +1683,75 @@ def get_daily_goal_hours(user_id):
 
 def get_time_period():
     """判断当前时段"""
-    h = datetime.now().hour
-    if 5 <= h < 9:
-        return "清晨"
-    elif 9 <= h < 12:
-        return "上午"
-    elif 12 <= h < 14:
-        return "午间"
-    elif 14 <= h < 18:
-        return "下午"
-    elif 18 <= h < 22:
-        return "晚间"
-    else:
-        return "深夜"
+    return get_time_period_service()
 
 def get_flow_focus_data(user_id):
     """汇聚今日心流数据：总时长、目标、进度、打卡状态、心情、连续天数"""
     today_minutes = get_today_duration(user_id)
-    pomo_count, pomo_minutes = get_today_pomodoros(user_id)
-    # 番茄钟时长与打卡时长取最大值（避免重复计算）
-    total_minutes = max(today_minutes, pomo_minutes) if pomo_minutes else today_minutes
+    _, pomo_minutes = get_today_pomodoros(user_id)
     goal_hours = get_daily_goal_hours(user_id)
-    goal_minutes = goal_hours * 60
-    progress_pct = min(round(total_minutes / goal_minutes * 100) if goal_minutes > 0 else 0, 100)
     current_ck = get_today_checkin(user_id)
-    checked_in = current_ck is not None
-    mood = current_ck["mood"] if current_ck else None
     streak = get_consecutive_days(user_id)
-    return {
-        "total_hours": round(total_minutes / 60, 1),
-        "total_minutes": total_minutes,
-        "goal_hours": goal_hours,
-        "progress_pct": progress_pct,
-        "checked_in": checked_in,
-        "mood": mood,
-        "streak": streak,
-    }
-
-# ── 心流寄语：规则兜底 + LLM 生成 ──
-
-FLOW_FALLBACKS = {
-    "清晨": [
-        "清晨的每一分钟都在为未来铺路，今天加油。",
-        "趁晨光正好，开启专注的一天。",
-        "早起的你，已经领先了大多数人。",
-    ],
-    "上午": [
-        "上午是大脑最清醒的时段，保持这份专注。",
-        "稳步推进，今天的目标正在靠近。",
-        "按自己的节奏来，每一步都算数。",
-    ],
-    "午间": [
-        "适当休整后继续，下午还有目标等你。",
-        "短暂的休息是为了更好的出发。",
-        "保持节奏，不急不躁。",
-    ],
-    "下午": [
-        "下午是攻坚的好时段，持续推进。",
-        "还有半天的机会，把进度再推一步。",
-        "专注当下，完成比完美更重要。",
-    ],
-    "晚间": [
-        "今天的坚持值得肯定，回顾一下收获。",
-        "夜深人静正是深度学习时，但别太晚。",
-        "复盘今日所学，让努力有迹可循。",
-    ],
-    "深夜": [
-        "夜深了，今天的努力已足够，早点休息。",
-        "身体是革命的本钱，明天再战。",
-        "今天的每一分钟都不会白费，晚安。",
-    ],
-}
+    return build_flow_focus_data(
+        today_minutes=today_minutes,
+        pomodoro_minutes=pomo_minutes,
+        goal_hours=goal_hours,
+        checked_in=current_ck is not None,
+        mood=current_ck["mood"] if current_ck else None,
+        streak=streak,
+    )
 
 def pick_flow_message(user_id):
     """根据时段 + 打卡数据选择心流寄语（纯规则，零延迟）"""
-    data = get_flow_focus_data(user_id)
-    period = get_time_period()
-    candidates = FLOW_FALLBACKS.get(period, FLOW_FALLBACKS["上午"])
-    pct = data["progress_pct"]
-
-    # 根据进度微调选句
-    if pct == 0 and data["streak"] >= 7:
-        idx = 0  # 有连续打卡但今天还没开始：温和提醒
-    elif pct >= 80:
-        idx = 1  # 快完成了：肯定
-    elif pct >= 50:
-        idx = 0  # 过半：鼓励保持
-    else:
-        idx = min(pct // 30, len(candidates) - 1)  # 根据进度梯度选
-
-    # 深夜 + 高完成度 → 劝休息
-    if period == "深夜" and pct >= 80:
-        return "今日目标已达成，这份坚持值得骄傲，去休息吧。"
-
-    return candidates[idx]
+    return pick_flow_message_service(
+        data=get_flow_focus_data(user_id),
+        period=get_time_period(),
+    )
 
 def generate_flow_message_prompt(user_id):
     """
     构建心流寄语 LLM prompt 字符串。
     调用方用 call_llm_api(prompt_str, model="mimo-v2.5", max_tokens=100) 获取 AI 寄语。
     """
-    data = get_flow_focus_data(user_id)
-    period = get_time_period()
-
-    prompt = f"""你是考研备考助手。根据以下用户数据，生成一句"今日心流寄语"。
-
-## 用户数据
-- 当前时段：{period}
-- 今日已学习：{data['total_hours']} 小时（每日目标 {data['goal_hours']} 小时）
-- 目标完成度：{data['progress_pct']}%
-- 今日是否已打卡：{'是' if data['checked_in'] else '否'}
-- 今日心情：{data['mood'] or '未记录'}
-- 连续打卡：{data['streak']} 天
-
-## 输出要求
-1. 只输出一句话（15-30 字），不加前缀、引号或解释
-2. 语气朴素理性，不使用"亲爱的""孩子""老师""同学"等称呼
-3. 时段对应态度：
-   - 清晨：鼓励开启新一天，简短有力
-   - 上午：肯定早间努力，提醒保持节奏
-   - 午间：提醒适当休息，储备下午精力
-   - 下午：关注进度推进，给予方向感
-   - 晚间：回顾今日收获，肯定坚持
-   - 深夜：温和提醒休息，不鼓励透支
-4. 完成度对应态度：
-   - 0%（未开始）：温和提醒，不施加压力
-   - 1-50%：鼓励推进，肯定已付出的努力
-   - 50-80%：肯定进展，提醒保持节奏
-   - 80%+：赞赏坚持，鼓励收尾
-5. 连续打卡 ≥ 7 天时可含蓄肯定习惯的力量"""
-
-    return prompt
+    return build_flow_message_prompt(
+        data=get_flow_focus_data(user_id),
+        period=get_time_period(),
+    )
 
 # ==================== 用户画像模块 ====================
 
 def _profile_columns():
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("PRAGMA table_info(user_profiles)")
-    columns = [col[1] for col in c.fetchall()]
-    conn.close()
-    return columns
+    return list_profile_columns_repo(MEMORY_DB)
 
 def get_user_profile(user_id):
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT * FROM user_profiles WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        return {}
-    columns = _profile_columns()
-    return dict(zip(columns, row))
+    return get_user_profile_repo(MEMORY_DB, user_id)
 
 def save_profile_field(user_id, field, value):
-    allowed = set(_profile_columns()) - {"id", "user_id", "created_at", "updated_at"}
-    if field not in allowed:
-        raise ValueError(f"非法字段: {field}")
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT 1 FROM user_profiles WHERE user_id=?", (user_id,))
-    exists = c.fetchone()
-    if exists:
-        c.execute(f"UPDATE user_profiles SET {field}=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (value, user_id))
-    else:
-        c.execute(f"INSERT INTO user_profiles (user_id, {field}) VALUES (?, ?)", (user_id, value))
-    conn.commit()
-    conn.close()
+    save_profile_field_repo(MEMORY_DB, user_id, field, value)
 
 def profile_is_complete(user_id):
-    profile = get_user_profile(user_id)
-    required = ["grade", "major", "target_major", "daily_hours"]
-    return all(profile.get(k) for k in required)
+    return profile_is_complete_service(get_user_profile(user_id))
 
 def _safe_json_loads(raw, default=None):
-    if default is None:
-        default = []
-    if not raw:
-        return default
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return default
+    return safe_json_loads_service(raw, default)
 
 def _display_target_schools(profile):
-    raw = profile.get("target_schools")
-    if not raw:
-        return "未设置"
-    data = _safe_json_loads(raw, {})
-    if isinstance(data, dict):
-        parts = [f"{k}: {v}" for k, v in data.items() if v]
-        return " · ".join(parts) if parts else "未设置"
-    return str(raw)
+    return display_target_schools_service(profile)
 
 def auto_generate_tags(user_id):
-    profile = get_user_profile(user_id)
-    tags = {
-        "common_errors": [],
-        "strong_areas": [],
-        "current_phase": profile.get("current_phase") or "基础",
-    }
-    weak_subjects = _safe_json_loads(profile.get("weak_subjects"))
-    strong_subjects = _safe_json_loads(profile.get("strong_subjects"))
-    if "数学" in weak_subjects:
-        tags["common_errors"].extend(["计算错误", "公式混淆"])
-    if "英语" in weak_subjects:
-        tags["common_errors"].extend(["语法错误", "词汇量不足"])
-    if "政治" in weak_subjects:
-        tags["common_errors"].append("知识点遗漏")
-    if "专业课" in weak_subjects:
-        tags["common_errors"].append("概念理解偏差")
-    if "数学" in strong_subjects:
-        tags["strong_areas"].extend(["逻辑推理", "公式应用"])
-    if "英语" in strong_subjects:
-        tags["strong_areas"].append("阅读理解")
-    if "政治" in strong_subjects:
-        tags["strong_areas"].append("时政敏感度")
-    tags["common_errors"] = list(dict.fromkeys(tags["common_errors"]))
-    tags["strong_areas"] = list(dict.fromkeys(tags["strong_areas"]))
-    save_profile_field(user_id, "common_errors", json.dumps(tags["common_errors"], ensure_ascii=False))
-    save_profile_field(user_id, "strong_areas", json.dumps(tags["strong_areas"], ensure_ascii=False))
-    save_profile_field(user_id, "current_phase", tags["current_phase"])
-    return tags
+    return persist_auto_tags(MEMORY_DB, user_id)
 
 def update_profile_from_conversation(user_id, query, answer):
-    extracted = {}
-    if API_KEY:
-        prompt = f"""从以下对话中提取用户信息，返回 JSON 格式：
-用户：{query}
-AI：{answer}
-请提取以下信息（如果有的话）：target_major, target_school, math_type, weak_subject, anxiety_level(1-5整数), current_phase(基础/强化/冲刺/模考)
-只返回 JSON，不要其他内容。如果没有信息，返回空 JSON {{}}"""
-        try:
-            result = call_llm_api(prompt, model="mimo-v2.5")
-            text = result.strip()
-            if text.startswith("```"):
-                text = re.sub(r"^```(?:json)?\s*", "", text)
-                text = re.sub(r"\s*```$", "", text)
-            extracted = json.loads(text)
-        except Exception:
-            extracted = {}
-    if not extracted:
-        extracted = _rule_extract_profile(query)
-    field_map = {"target_major": "target_major", "math_type": "math_exam_type", "anxiety_level": "anxiety_level", "current_phase": "current_phase"}
-    for src, dst in field_map.items():
-        if extracted.get(src):
-            save_profile_field(user_id, dst, extracted[src])
-    if extracted.get("target_school"):
-        schools = _safe_json_loads(get_user_profile(user_id).get("target_schools"), {})
-        schools["冲刺"] = extracted["target_school"]
-        save_profile_field(user_id, "target_schools", json.dumps(schools, ensure_ascii=False))
-    if extracted.get("weak_subject"):
-        weak = _safe_json_loads(get_user_profile(user_id).get("weak_subjects"))
-        if extracted["weak_subject"] not in weak:
-            weak.append(extracted["weak_subject"])
-        save_profile_field(user_id, "weak_subjects", json.dumps(weak, ensure_ascii=False))
-    return extracted
+    return update_profile_from_conversation_service(
+        MEMORY_DB,
+        user_id,
+        query,
+        answer,
+        llm_call=(lambda prompt: call_llm_api(prompt, model="mimo-v2.5")) if API_KEY else None,
+    )
 
 def _rule_extract_profile(query):
-    result = {}
-    school_match = re.search(r"(清华|北大|复旦|上交|浙大|中科大|南大|武大|目标.*?([^\s，。]+))", query)
-    if school_match:
-        result["target_school"] = school_match.group(1).replace("目标", "").strip("是")
-    if "焦虑" in query or "崩溃" in query:
-        result["anxiety_level"] = 4
-    for phase in ("基础", "强化", "冲刺", "模考"):
-        if phase in query:
-            result["current_phase"] = phase
-            break
-    for mt in ("数一", "数二", "数三", "199管综"):
-        if mt in query:
-            result["math_type"] = mt
-            break
-    return result
+    return rule_extract_profile_service(query)
 
 def check_content_safety(answer, context=None):
     context = context or {}
@@ -1982,232 +1774,62 @@ def check_content_safety(answer, context=None):
 # ==================== 学习规划模块 ====================
 
 def determine_phase():
-    month = datetime.now().month
-    if 3 <= month <= 6:
-        return "基础阶段"
-    elif 7 <= month <= 9:
-        return "强化阶段"
-    elif 10 <= month <= 11:
-        return "提升阶段"
-    elif month == 12:
-        return "冲刺阶段"
-    else:
-        return "基础阶段"
-
-PHASE_TEMPLATES = {
-    "基础阶段": {"数学": ["教材通读", "基础概念理解", "基础题型练习", "公式推导"], "英语": ["词汇积累", "长难句解析", "阅读基础", "写作基础"], "政治": ["教材通读", "基本概念理解", "选择题练习"], "专业课": ["教材通读", "核心概念理解", "基础题型练习"]},
-    "强化阶段": {"数学": ["专项突破", "大量刷题", "错题整理", "知识体系建立"], "英语": ["阅读强化", "写作强化", "翻译强化", "新题型练习"], "政治": ["重点章节强化", "选择题强化", "分析题练习"], "专业课": ["重点章节强化", "真题研究", "专题训练"]},
-    "提升阶段": {"数学": ["真题实战", "查漏补缺", "模考检验", "高频考点强化"], "英语": ["真题实战", "写作模板", "阅读技巧", "完形填空"], "政治": ["真题实战", "时政热点", "分析题强化", "模拟考试"], "专业课": ["真题实战", "模拟考试", "重点难点突破"]},
-    "冲刺阶段": {"数学": ["高频考点押题", "错题回顾", "公式速记", "模拟考试"], "英语": ["作文模板强化", "阅读技巧", "词汇巩固", "模拟考试"], "政治": ["时政热点", "分析题押题", "选择题速刷", "模拟考试"], "专业课": ["高频考点", "模拟考试", "重点难点回顾"]}
-}
+    return determine_phase_service()
 
 def get_subject_weights(math_type):
-    weights = {
-        "数一": {"数学": 0.35, "英语": 0.20, "政治": 0.15, "专业课": 0.30},
-        "数二": {"数学": 0.35, "英语": 0.20, "政治": 0.15, "专业课": 0.30},
-        "数三": {"数学": 0.35, "英语": 0.20, "政治": 0.15, "专业课": 0.30},
-        "不考数学": {"英语": 0.30, "政治": 0.20, "专业课": 0.50},
-        "199管综": {"管综": 0.40, "英语": 0.30, "政治": 0.15, "专业课": 0.15}
-    }
-    return weights.get(math_type, weights["数一"])
+    return get_subject_weights_service(math_type)
 
 def calculate_daily_hours(daily_hours, math_type):
-    weights = get_subject_weights(math_type)
-    return {sub: round(daily_hours * w, 1) for sub, w in weights.items()}
+    return calculate_daily_hours_service(daily_hours, math_type)
 
 def save_plan(user_id, plan_name, target_exam_date, math_type, daily_hours, weight_config, phase):
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    now_str = datetime.now().strftime("%Y-%m-%d")
-    config_json = json.dumps(weight_config, ensure_ascii=False)
-    c.execute("INSERT INTO study_plans (user_id, plan_name, target_exam_date, math_type, daily_hours, subjects_config, current_phase, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)",
-              (user_id, plan_name, target_exam_date, math_type, daily_hours, config_json, phase, now_str, now_str))
-    plan_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return plan_id
+    return save_plan_repo(
+        MEMORY_DB,
+        user_id,
+        plan_name,
+        target_exam_date,
+        math_type,
+        daily_hours,
+        weight_config,
+        phase,
+    )
 
 def save_task(user_id, plan_id, task_type, subject, task_name, description, target_date, est_hours, priority=3):
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    now_str = datetime.now().strftime("%Y-%m-%d")
-    c.execute("INSERT INTO plan_tasks (plan_id, user_id, task_type, subject, task_name, description, target_date, estimated_hours, priority, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-              (plan_id, user_id, task_type, subject, task_name, description, target_date, est_hours, priority, now_str))
-    conn.commit()
-    conn.close()
+    save_task_repo(
+        MEMORY_DB,
+        user_id,
+        plan_id,
+        task_type,
+        subject,
+        task_name,
+        description,
+        target_date,
+        est_hours,
+        priority=priority,
+    )
 
 def get_user_tasks(user_id):
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT id, subject, task_name, description, target_date, estimated_hours, status FROM plan_tasks WHERE user_id = ? ORDER BY target_date", (user_id,))
-    res = []
-    for row in c.fetchall():
-        res.append({"id": row[0], "subject": row[1], "task_name": row[2], "description": row[3], "target_date": row[4], "estimated_hours": row[5], "status": row[6]})
-    conn.close()
-    return res
+    return get_user_tasks_repo(MEMORY_DB, user_id)
 
 def update_task_status(task_id, new_status):
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    completed_at = datetime.now().strftime("%Y-%m-%d") if new_status == "completed" else None
-    c.execute("UPDATE plan_tasks SET status = ?, completed_at = ? WHERE id = ?", (new_status, completed_at, task_id))
-    conn.commit()
-    conn.close()
+    update_task_status_repo(MEMORY_DB, task_id, new_status)
 
 def calculate_progress(user_id):
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) completed FROM plan_tasks WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    total_tasks = row[0] if row else 0
-    completed_tasks = row[1] if row else 0
-    c.execute("SELECT subject, COUNT(*) total, COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0) completed FROM plan_tasks WHERE user_id = ? GROUP BY subject", (user_id,))
-    subjects = {}
-    for row in c.fetchall():
-        sub, t, cpl = row
-        rate = round(cpl / max(t, 1) * 100, 1)
-        subjects[sub] = {"total": t, "completed": cpl, "completion_rate": rate}
-    c.execute("SELECT planned_hours, actual_hours FROM plan_progress WHERE user_id = ? ORDER BY record_date DESC LIMIT 7", (user_id,))
-    recent = c.fetchall()
-    deviation = 0.0
-    if recent:
-        total_plan = sum(r[0] for r in recent)
-        total_act = sum(r[1] for r in recent)
-        if total_plan > 0:
-            deviation = round((total_plan - total_act) / total_plan * 100, 1)
-    conn.close()
-    completion_rate = round(completed_tasks / max(total_tasks, 1) * 100, 1)
-    return {"total_tasks": total_tasks, "completed_tasks": completed_tasks, "completion_rate": completion_rate, "deviation": deviation, "subjects": subjects}
-
-RECOVERY_STRATEGIES = {
-    1: {"name": "删减低频考点", "description": "剔除近5年未考的知识点", "trigger": "deviation > 20%", "action": "删除低频考点任务，聚焦高频内容"},
-    2: {"name": "聚焦高频核心", "description": "集中精力攻克高频+必考内容", "trigger": "deviation > 30%", "action": "将高频考点任务优先级提升为最高"},
-    3: {"name": "压缩次要科目", "description": "提高优势科目用时，控制短板科目投入", "trigger": "deviation > 25%", "action": "调整科目权重，增加优势科目时间"},
-    4: {"name": "切换速通模式", "description": "只看知识框架 + 重点题型，不全做", "trigger": "deviation > 40%", "action": "简化任务内容，只保留核心框架"},
-    5: {"name": "错题优先", "description": "优先做错题，而非刷新题", "trigger": "连续3天完成率 < 60%", "action": "将错题复习任务优先级提升"},
-    6: {"name": "调整作息", "description": "增加每日有效学习时长", "trigger": "连续5天完成率 < 70%", "action": "建议调整作息，增加学习时长"},
-}
+    return calculate_progress_repo(MEMORY_DB, user_id)
 
 def select_recovery_strategy(deviation, recent_completion_rates):
-    strategies = []
-    if deviation > 40:
-        strategies.append(4)
-    if deviation > 30:
-        strategies.append(2)
-    if deviation > 25:
-        strategies.append(3)
-    if deviation > 20:
-        strategies.append(1)
-    if len(recent_completion_rates) >= 3:
-        avg_rate = sum(recent_completion_rates[:3]) / 3
-        if avg_rate < 60:
-            strategies.append(5)
-    if len(recent_completion_rates) >= 5:
-        avg_rate5 = sum(recent_completion_rates[:5]) / 5
-        if avg_rate5 < 70:
-            strategies.append(6)
-    return strategies
+    return select_recovery_strategy_service(deviation, recent_completion_rates)
 
 def generate_plan(user_id, target_date, math_type, daily_hours):
-    # 获取用户画像
-    profile = get_user_profile(user_id)
-    weights = get_subject_weights(math_type)
-    phase = determine_phase()
-    daily_sub_hours = calculate_daily_hours(daily_hours, math_type)
-    days_remaining = (target_date - datetime.now().date()).days
-
-    # 从画像提取个性化信息（只取有效值）
-    weak_subjects = _safe_json_loads(profile.get("weak_subjects"))
-    strong_subjects = _safe_json_loads(profile.get("strong_subjects"))
-    target_major = profile.get("target_major") or ""
-    target_schools = _display_target_schools(profile)
-    anxiety_level = profile.get("anxiety_level")
-    undergraduate_major = profile.get("undergraduate_major") or ""
-    undergraduate_level = profile.get("undergraduate_level") or ""
-    is_cross_major = profile.get("is_cross_major") or ""
-
-    # 弱科加权（优先补弱科，上限45%）
-    if weak_subjects:
-        for sub in weak_subjects:
-            if sub in weights:
-                weights[sub] = min(weights[sub] * 1.2, 0.45)
-        total = sum(weights.values())
-        weights = {k: round(v / total, 3) for k, v in weights.items()}
-        daily_sub_hours = {k: round(daily_hours * v, 1) for k, v in weights.items()}
-
-    tasks = []
-    for subject, weight in weights.items():
-        sub_h = daily_hours * weight
-        task_list = PHASE_TEMPLATES[phase].get(subject, [])
-        priority = 1 if subject in weak_subjects else 3
-        for task_name in task_list:
-            single_task_h = round(sub_h / max(len(task_list), 1), 1)
-            tasks.append({"subject": subject, "task_name": task_name, "estimated_hours": single_task_h, "priority": priority})
-
-    # 构建个性化 prompt（只包含有值的字段）
-    profile_lines = []
-    if target_schools and target_schools != "未设置":
-        profile_lines.append(f"- 目标院校：{target_schools}")
-    if target_major:
-        profile_lines.append(f"- 目标专业：{target_major}")
-    if undergraduate_major:
-        profile_lines.append(f"- 本专业：{undergraduate_major}")
-    if undergraduate_level:
-        profile_lines.append(f"- 本科院校级别：{undergraduate_level}")
-    if is_cross_major and is_cross_major == "是":
-        profile_lines.append(f"- 是否跨考：是（跨考生需额外注意专业课基础）")
-    if weak_subjects:
-        profile_lines.append(f"- 弱科：{', '.join(weak_subjects)}")
-    if strong_subjects:
-        profile_lines.append(f"- 强科：{', '.join(strong_subjects)}")
-    if anxiety_level:
-        profile_lines.append(f"- 焦虑程度：{anxiety_level}/5")
-
-    profile_text = "\n".join(profile_lines) if profile_lines else "（用户尚未填写画像信息）"
-
-    prompt = f"""你是考研学习规划专家。请生成一份结构化的学习时间表。
-
-## 用户画像
-{profile_text}
-- 每日学习时长：{daily_hours}小时
-- 数学类型：{math_type}
-
-## 考试规划
-- 目标日期：{target_date.strftime("%Y-%m-%d")}
-- 剩余天数：{days_remaining}天
-- 当前阶段：{phase}
-- 各科权重：{json.dumps(weights, ensure_ascii=False)}
-
-## 输出格式要求
-
-请以 **Markdown 表格 + 简要说明** 的格式输出，不要长篇抒情，语气简洁专业：
-
-### 1. 每日时间表
-用表格输出，例如：
-```
-| 时间段 | 科目 | 任务重点 | 建议时长 |
-|--------|------|----------|----------|
-| 08:00-12:00 | 数学 | 专题突破+真题训练 | 4h |
-| 14:00-17:00 | 英语 | 阅读理解+单词 | 3h |
-| 19:00-21:00 | 政治 | 章节梳理+选择题 | 2h |
-| 21:00-22:00 | 总结整理 | 错题回顾+明日计划 | 1h |
-```
-
-### 2. 时间段分配原则
-- 上午安排需要高度专注的科目（如数学、专业课）
-- 下午安排语言类科目（如英语）
-- 晚上安排记忆和政治类科目
-- 根据弱科（{', '.join(weak_subjects) if weak_subjects else '无'}）优先分配黄金时间段
-- 每科之间留10-15分钟休息
-
-### 3. 每周计划概述
-- 周一至周五：按时间表执行
-- 周六：模拟测试+批改分析
-- 周日：本周错题复习+下周计划调整
-
-请直接输出，无需额外说明。"""
-    description = call_llm_api(prompt, model="mimo-v2.5")
-    return {"description": description, "tasks": tasks, "phase": phase, "weights": weights, "daily_sub_hours": daily_sub_hours}
+    return generate_plan_bundle(
+        user_profile=get_user_profile(user_id),
+        target_date=target_date,
+        math_type=math_type,
+        daily_hours=daily_hours,
+        llm_call=lambda prompt: call_llm_api(prompt, model="mimo-v2.5"),
+        display_target_schools_fn=_display_target_schools,
+        json_loads_fn=_safe_json_loads,
+    )
 
 def calc_recall(stability, days):
     if days <= 0:
@@ -2237,21 +1859,13 @@ def get_feynman_history(user_id, limit=10):
 
 def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000):
     """调用 LLM API"""
-    data = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": 0.3
-    }
-    req = urllib.request.Request(
-        API_BASE + "/chat/completions",
-        data=json.dumps(data).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-        method="POST"
+    return simple_prompt_completion(
+        prompt,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=0.3,
+        timeout=90,
     )
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
-        return msg.get("content") or msg.get("reasoning_content") or ""
 
 # 费曼学习法评价提示词
 CONCEPT_EVAL_PROMPT = """你是考研数学辅导专家，同时也是教育心理学专家。你的任务是评价学生对数学概念的理解和表达能力。
@@ -2657,51 +2271,38 @@ EXPLAIN: 解析过程
 
         user_prompt = f"为以下知识点出1道选择题：\n\n{kb_list}\n\n{context_text}"
 
-        request_data = {
-            "model": "mimo-v2.5",
-            "messages": [
+        msg = chat_completion_message(
+            messages=[
                 {"role": "system", "content": full_system},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": 5000,
-            "temperature": 0.3
-        }
-
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(request_data).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {API_KEY}'
-            },
-            method='POST'
+            model="mimo-v2.5",
+            max_tokens=5000,
+            temperature=0.3,
+            timeout=120,
         )
-
-        with urllib.request.urlopen(req, timeout=120) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            msg = result['choices'][0]['message']
-            # MiMo 思维链模型：content 和 reasoning_content 都可能包含答案
-            content = msg.get('content') or ''
-            reasoning = msg.get('reasoning_content') or ''
-            raw = content if content and 'Q:' in content else ''
-            # 从 reasoning_content 中提取 Q:...--- 格式
-            if not raw:
-                q_match = re.search(r'(Q:.*?---)', reasoning, re.DOTALL)
-                if q_match:
-                    raw = q_match.group(1)
-            # 兜底：从合并文本中提取
-            if not raw:
-                combined = content + '\n' + reasoning
-                q_match = re.search(r'(Q:.*?---)', combined, re.DOTALL)
-                if q_match:
-                    raw = q_match.group(1)
-            if not raw:
-                raw = content or reasoning
-            return {
-                "success": True,
-                "questions": raw,
-                "knowledge_points": [kp['knowledge_id'] for kp in knowledge_points[:3]]
-            }
+        # MiMo 思维链模型：content 和 reasoning_content 都可能包含答案
+        content = msg.get('content') or ''
+        reasoning = msg.get('reasoning_content') or ''
+        raw = content if content and 'Q:' in content else ''
+        # 从 reasoning_content 中提取 Q:...--- 格式
+        if not raw:
+            q_match = re.search(r'(Q:.*?---)', reasoning, re.DOTALL)
+            if q_match:
+                raw = q_match.group(1)
+        # 兜底：从合并文本中提取
+        if not raw:
+            combined = content + '\n' + reasoning
+            q_match = re.search(r'(Q:.*?---)', combined, re.DOTALL)
+            if q_match:
+                raw = q_match.group(1)
+        if not raw:
+            raw = content or reasoning
+        return {
+            "success": True,
+            "questions": raw,
+            "knowledge_points": [kp['knowledge_id'] for kp in knowledge_points[:3]]
+        }
 
     except Exception as e:
         print(f"生成题目失败: {e}")
@@ -2872,14 +2473,13 @@ def _generate_material(prompt):
         "temperature": 0.3,
     }
     try:
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-            method="POST"
+        msg = chat_completion_message(
+            messages=data["messages"],
+            model=data["model"],
+            max_tokens=data["max_tokens"],
+            temperature=data["temperature"],
+            timeout=300,
         )
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            msg = json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
         reasoning = msg.get("reasoning_content") or ""
         content = msg.get("content") or ""
         # 如果模型不区分思考/结果，则全部作为结果
@@ -2942,141 +2542,39 @@ POLITICS_PROMPT = """你是考研政治辅导专家。专精：马原原理、�
 
 def classify_query(query):
     """Router: 判断问题属于 english/politics/math"""
-    data = {
-        "model": "mimo-v2.5",
-        "messages": [
-            {"role": "system", "content": ROUTER_PROMPT},
-            {"role": "user", "content": query}
-        ],
-        "max_tokens": 30, "temperature": 0.3
-    }
-    req = urllib.request.Request(API_BASE + "/chat/completions",
-        data=json.dumps(data).encode('utf-8'),
-        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'},
-        method='POST')
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
-            return json.loads(extract_json(raw)).get("type", "math")
+        raw = chat_completion_text(
+            messages=[
+                {"role": "system", "content": ROUTER_PROMPT},
+                {"role": "user", "content": query},
+            ],
+            model="mimo-v2.5",
+            max_tokens=30,
+            temperature=0.3,
+            timeout=20,
+        )
+        return json.loads(extract_json(raw)).get("type", "math")
     except:
         return "math"
 
 def parse_multi_output(raw_text):
     """解析 LLM 一次输出的 [ANSWER]/[KNOWLEDGE]/[QUIZ]"""
-    if "[ANSWER]" not in raw_text:
-        cleaned = raw_text.replace("\\(", "$").replace("\\)", "$").replace("\\[", "$$").replace("\\]", "$$")
-        return {"answer": cleaned[:2000], "knowledge": [], "quiz": ""}
-    def extract(begin, end):
-        if begin in raw_text and end in raw_text:
-            return raw_text.split(begin, 1)[1].split(end, 1)[0].strip()
-        return ""
-    knowledge_part = raw_text.split("[KNOWLEDGE]", 1)[-1] if "[KNOWLEDGE]" in raw_text else ""
-    knowledge_raw = knowledge_part.split("[", 1)[0].strip() if "[" in knowledge_part else knowledge_part.strip()
-    return {
-        "answer": _fix_latex(extract("[ANSWER]", "[KNOWLEDGE]") or raw_text[:1500]),
-        "knowledge": [k.strip() for k in knowledge_raw.split(",") if k.strip()],
-    }
+    return parse_multi_output_service(raw_text, latex_fix_fn=_fix_latex)
 
 def run_pipeline(query, results, model_name, img_data=None):
     """统一管线: 流式调用 LLM，逐 token 返回"""
-    pipeline_log = []
-    
     skill_prompt = build_system_prompt_with_skills(st.session_state.get("active_skills", []))
-    context = "\n\n".join([f"【{d['id']}】\n{d['text'][:800]}" for d in results[:3]]) if results else ""
-
-    math_rules = r"""- 所有公式必须用 $...$ 包裹，例如 $f(x)$、$\int_{a}^{b}$、$\frac{a}{b}$
-- 独立公式用 $$...$$，例如 $$\lim_{x \to 0} \frac{\sin x}{x} = 1$$
-- 禁止使用 \( \) 或 \[ \]
-- 禁止在 $ 外面写 \frac、\int、\lim、\pi 等 LaTeX 命令"""
-
-    system_prompt = f"""你是考研数学辅导专家。请完成以下任务并用标签输出：
-
-任务1：根据参考资料回答用户问题。{"严格遵循 Skill 的格式要求。" if skill_prompt else ""}
-
-任务2：判断问题涉及的知识点，输出概念名称（如：导数, 定积分, 矩阵）。
-
-⚠️ 数学公式强制规则（必须遵守，否则无法显示）：
-{math_rules}
-
-输出格式：
-[ANSWER]
-（回答）
-
-[KNOWLEDGE]
-（概念名，逗号分隔）
-
-{skill_prompt if skill_prompt else ""}
-
-参考资料：
-{context}"""
-
-    if img_data:
-        user_content = [
-            {"type": "text", "text": f"问题：{query}"},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
-        ]
-    else:
-        user_content = f"问题：{query}"
-    model = model_name
-    max_tok = 800 if img_data else 1500
-    temp = 0.3
-    data = {
-        "model": model,
-        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}],
-        "max_tokens": max_tok,
-        "temperature": temp,
-        "stream": True,
-    }
-    # 先尝试流式
     try:
-        req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
-        raw_full = ""
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            buffer = ""
-            while True:
-                chunk = resp.read(1024)
-                if not chunk:
-                    break
-                buffer += chunk.decode("utf-8", errors="ignore")
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    line = line.strip()
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload == "[DONE]":
-                        break
-                    try:
-                        obj = json.loads(payload)
-                        delta_obj = obj.get("choices", [{}])[0].get("delta", {})
-                        # MiMo 是思维链模型，内容在 reasoning_content 中
-                        delta = delta_obj.get("content") or delta_obj.get("reasoning_content") or ""
-                        if delta:
-                            raw_full += delta
-                            yield {"type": "token", "content": delta}
-                    except json.JSONDecodeError:
-                        pass
-        result = parse_multi_output(raw_full)
-        result["_raw_debug"] = raw_full[:500]
-        result["qtype"] = "math"
-        result["pipeline_log"] = pipeline_log
-        yield {"type": "done", "result": result}
-    except Exception:
-        # 流式失败，降级为非流式
-        try:
-            data["stream"] = False
-            req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                msg = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']
-                raw_full = msg.get('content') or msg.get('reasoning_content') or ''
-                yield {"type": "token", "content": raw_full}
-            result = parse_multi_output(raw_full)
-            result["_raw_debug"] = raw_full[:500]
-            result["qtype"] = "math"
-            result["pipeline_log"] = pipeline_log
-            yield {"type": "done", "result": result}
-        except Exception as e:
-            yield {"type": "done", "result": {"answer": f"[系统提示] API调用失败: {str(e)[:100]}", "knowledge": [], "quiz": "", "qtype": "math", "pipeline_log": pipeline_log}}
+        yield from stream_math_qa(
+            query=query,
+            results=results,
+            model_name=model_name,
+            skill_prompt=skill_prompt,
+            img_data=img_data,
+            latex_fix_fn=_fix_latex,
+        )
+    except Exception as e:
+        yield {"type": "done", "result": {"answer": f"[系统提示] API调用失败: {str(e)[:100]}", "knowledge": [], "quiz": "", "qtype": "math", "pipeline_log": []}}
 
 # ==================== LLM调用 ====================
 
@@ -3141,29 +2639,16 @@ def call_llm(query, context_docs, model_name=None):
         # 不同的max_tokens
         max_tokens = 800 if has_context else 1200
 
-        request_data = {
-            "model": model_name,
-            "messages": [
+        return chat_completion_text(
+            messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": max_tokens,
-            "temperature": 0.3
-        }
-
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(request_data).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {API_KEY}'
-            },
-            method='POST'
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=0.3,
+            timeout=30,
         )
-
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            return result['choices'][0]['message']['content']
 
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8') if e.fp else ""
@@ -3210,24 +2695,17 @@ def evaluate_hallucination(user_query: str, context: str, agent_response: str, m
 [Agent Response]:
 {agent_response}"""
 
-        data = {
-            "model": model_name,
-            "messages": [
+        content = chat_completion_text(
+            messages=[
                 {"role": "system", "content": MATH_EVAL_PROMPT},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            "max_tokens": 600,
-            "temperature": 0.1
-        }
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(data).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'},
-            method='POST'
+            model=model_name,
+            max_tokens=600,
+            temperature=0.1,
+            timeout=30,
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            content = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
-            return json.loads(content)
+        return json.loads(content)
     except Exception as e:
         return {"is_hallucinating": False, "error": str(e), "hallucinated_claims": [], "common_sense_claims": []}
 
@@ -3272,30 +2750,17 @@ def agent_reflect(question, answer, feedback):
 
 直接输出规则文字，不要多余内容。"""
 
-        request_data = {
-            "model": MODEL_NAME,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 200,
-            "temperature": 0.3
-        }
+        rule = chat_completion_text(
+            messages=[{"role": "user", "content": prompt}],
+            model=MODEL_NAME,
+            max_tokens=200,
+            temperature=0.3,
+            timeout=20,
+        ).strip()
 
-        req = urllib.request.Request(
-            API_BASE + "/chat/completions",
-            data=json.dumps(request_data).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {API_KEY}'
-            },
-            method='POST'
-        )
-
-        with urllib.request.urlopen(req, timeout=20) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            rule = result['choices'][0]['message']['content'].strip()
-
-            # 追加到动态经验库
-            confirm = trigger_self_learning(rule)
-            return {"success": True, "reflection": rule, "confirm": confirm}
+        # 追加到动态经验库
+        confirm = trigger_self_learning(rule)
+        return {"success": True, "reflection": rule, "confirm": confirm}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -3311,67 +2776,6 @@ def add_thinking(msg):
     """添加思考日志"""
     timestamp = datetime.now().strftime("%H:%M:%S")
     st.session_state.thinking_log.append(f"[{timestamp}] {msg}")
-
-# ==================== Skill 技能系统 ====================
-
-SKILLS_DIR = Path("skills")
-
-def load_all_skills():
-    """自动扫描 skills/ 目录，加载所有 SKILL.md"""
-    skills = {}
-    if not SKILLS_DIR.exists():
-        return skills
-    for skill_dir in sorted(SKILLS_DIR.iterdir()):
-        if not skill_dir.is_dir() or skill_dir.name.startswith("_"):
-            continue
-        skill_file = skill_dir / "SKILL.md"
-        if not skill_file.exists():
-            continue
-        try:
-            content = skill_file.read_text(encoding="utf-8")
-            meta, body = parse_skill_frontmatter(content)
-            if meta.get("hidden"):
-                continue
-            meta["_dir"] = str(skill_dir)
-            meta["_body"] = body.strip()
-            skills[meta.get("name", skill_dir.name)] = meta
-        except:
-            pass
-    return skills
-
-def parse_skill_frontmatter(content):
-    """解析 YAML frontmatter，返回 (meta_dict, body)"""
-    lines = content.strip().split("\n")
-    meta = {}
-    body_start = 0
-    if lines and lines[0].strip() == "---":
-        i = 1
-        while i < len(lines):
-            line = lines[i]
-            if line.strip() == "---":
-                body_start = i + 1
-                break
-            if ":" in line:
-                key, _, val = line.partition(":")
-                key = key.strip()
-                val = val.strip().strip('"').strip("'")
-                if val.startswith("[") and val.endswith("]"):
-                    val = [x.strip().strip('"') for x in val[1:-1].split(",")]
-                meta[key] = val
-            i += 1
-    body = "\n".join(lines[body_start:]).strip() if body_start > 0 else content.strip()
-    return meta, body
-
-def build_system_prompt_with_skills(active_skills):
-    """将激活的 Skill prompts 注入 system_prompt"""
-    skill_prompts = []
-    for name in active_skills:
-        skills = load_all_skills()
-        if name in skills:
-            body = skills[name].get("_body", "")
-            if body:
-                skill_prompts.append(f"## Skill: {skills[name].get('description', name)}\n\n{body}")
-    return "\n\n---\n\n".join(skill_prompts) if skill_prompts else ""
 
 # ==================== 智能知识点匹配 ====================
 
@@ -3389,90 +2793,32 @@ def _jaccard(set_a, set_b):
 
 def _build_knowledge_index(corpus):
     """构建知识点倒排索引（启动时执行一次）"""
-    idx = {"doc_names": [], "title_map": {}, "title_kw": {}, "content_terms": {}}
-    for doc in corpus:
-        fname = doc["id"]
-        text = doc["text"]
-        idx["doc_names"].append(fname)
-        # 提取标题
-        title_line = ""
-        for line in text.split("\n"):
-            s = line.strip()
-            if s.startswith("# "):
-                title_line = s.lstrip("# ").strip()
-                break
-        idx["title_map"][fname] = title_line or fname
-        # 标题关键词：字符级 bigram
-        idx["title_kw"][fname] = _to_bigrams(title_line or fname)
-        # 全文 bigram 词频（用于 TF 重叠）
-        idx["content_terms"][fname] = set(_to_bigrams(text[:3000]))
-    return idx
+    return build_knowledge_index_service(corpus)
 
 def match_knowledge_v2(concepts, index):
     """用索引匹配 LLM 提取的概念 → 文件名列表"""
-    if not concepts or not index:
-        return []
-    _NOISE = {"函数", "公式", "定理", "法则", "方法", "计算", "概念", "性质", "定义", "应用", "意义"}
-    results = []
-    for concept_raw in concepts:
-        concept_raw = concept_raw.strip()
-        if not concept_raw:
-            continue
-        # 拆分停用词：尝试多粒度匹配
-        variants = [concept_raw]
-        for noise in _NOISE:
-            if noise in concept_raw and len(concept_raw.replace(noise, "")) >= 2:
-                variants.append(concept_raw.replace(noise, ""))
-        scores = {}
-        for fname in index["doc_names"]:
-            title = index["title_map"].get(fname, "")
-            best_var_score = 0.0
-            for variant in variants[:2]:
-                vs = 0.0
-                v_bigrams = _to_bigrams(variant)
-                pos = title.find(variant)
-                if pos >= 0:
-                    # 位置加权：越靠近标题开头分越高
-                    vs += 0.5 * max(0.1, 1 - pos / max(len(title), 1))
-                else:
-                    vs += _jaccard(v_bigrams, index["title_kw"].get(fname, set())) * 0.3
-                vs += _jaccard(v_bigrams, index["content_terms"].get(fname, set())) * 0.2
-                if vs > best_var_score:
-                    best_var_score = vs
-            if best_var_score > 0:
-                scores[fname] = best_var_score
-        best = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:2]
-        for fname, _ in best:
-            results.append(fname)
-    return list(dict.fromkeys(results))
+    return match_knowledge_concepts_service(concepts, index)
 
 def smart_match_knowledge(query):
     """LLM 提取概念 → 向量/关键词双重匹配"""
-    # ① LLM 提取概念
-    try:
-        data = {
-            "model": "mimo-v2.5",
-            "messages": [
-                {"role": "system", "content": "从以下考研数学问题中提取1-3个核心知识点名称（每行一个，不要编号）。"},
-                {"role": "user", "content": query}
-            ],
-            "max_tokens": 500, "temperature": 0.3
-        }
-        req = urllib.request.Request(API_BASE + "/chat/completions",
-            data=json.dumps(data).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'},
-            method='POST')
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            concepts = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content']
-            concepts = [c.strip().strip("-•*") for c in concepts.split("\n") if c.strip()]
-    except:
-        return []
-    # ② 用预建索引匹配
     idx = st.session_state.get("_knowledge_index")
     if not idx:
         idx = _build_knowledge_index(load_corpus())
         st.session_state["_knowledge_index"] = idx
-    return match_knowledge_v2(concepts, idx)
+    return smart_match_knowledge_service(
+        query,
+        index=idx,
+        llm_extract_fn=lambda q: chat_completion_text(
+            messages=[
+                {"role": "system", "content": "从以下考研数学问题中提取1-3个核心知识点名称（每行一个，不要编号）。"},
+                {"role": "user", "content": q},
+            ],
+            model="mimo-v2.5",
+            max_tokens=120,
+            temperature=0.2,
+            timeout=20,
+        ),
+    )
 
 # ==================== UI界面 ====================
 
@@ -4168,15 +3514,9 @@ if st.session_state.page == "popularity":
         if not profile:
             st.info("请先在「打卡督学 → 学习画像」中填写个人信息，以获取个性化报考建议。")
         else:
-            summary_parts = []
-            if profile.get("undergraduate_level"):
-                summary_parts.append(f"本科{profile['undergraduate_level']}")
-            if profile.get("grade"):
-                summary_parts.append(profile["grade"])
-            if profile.get("target_major"):
-                summary_parts.append(f"目标{profile['target_major']}")
-            if summary_parts:
-                st.caption("当前画像：" + " · ".join(summary_parts))
+            profile_caption = build_recommendation_profile_caption(profile)
+            if profile_caption:
+                st.caption("当前画像：" + profile_caption)
 
         # 生成建议
         if st.button("生成/刷新个人建议", use_container_width=True, key="gen_rec"):
@@ -4429,13 +3769,7 @@ if st.session_state.page == "english":
         max_score = 10 if part_type == "Part A 应用文" else (20 if exam_type == "英语一" else 15)
 
         # 历年真题库
-        essay_topics_data = {}
-        topics_file = Path("data/essay_topics.json")
-        if topics_file.exists():
-            try:
-                essay_topics_data = json.loads(topics_file.read_text(encoding="utf-8"))
-            except:
-                pass
+        essay_topics_data = load_essay_topics()
 
         if essay_topics_data:
             with st.expander("历年真题 (2016-2025)", expanded=False):
@@ -4477,19 +3811,7 @@ if st.session_state.page == "english":
             if st.button("识别照片文字", use_container_width=True):
                 with st.spinner("OCR 识别中..."):
                     try:
-                        ocr_prompt = "请识别这张照片中的英语作文内容，只输出英文文本，保持原文格式和段落分隔。"
-                        data = {"model": "mimo-v2.5", "messages": [
-                            {"role": "user", "content": [
-                                {"type": "text", "text": ocr_prompt},
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
-                            ]}
-                        ], "max_tokens": 2000, "temperature": 0}
-                        req = urllib.request.Request(API_BASE + "/chat/completions",
-                            data=json.dumps(data).encode("utf-8"),
-                            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                            method="POST")
-                        with urllib.request.urlopen(req, timeout=60) as resp:
-                            ocr_result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
+                        ocr_result = extract_essay_text_from_image(img_data)
                         st.session_state._essay_ocr_text = ocr_result
                         st.rerun()
                     except Exception as e:
@@ -4518,138 +3840,14 @@ if st.session_state.page == "english":
             should_grade = essay_submitted and edited_text.strip()
 
         if should_grade:
-            # 构建动态提示词
-            part_desc = "应用文（约100词，书信/通知/邮件）" if "Part A" in part_type else "大作文"
-            if "Part A" in part_type:
-                task_desc = "检查格式是否正确（书信格式、通知格式等），内容是否覆盖所有要点"
-            elif exam_type == "英语一":
-                task_desc = "图画作文，3步：描述图画 → 解读寓意 → 给出评论（160-200词，满分20分）"
-            else:
-                task_desc = "图表作文，2步：描述图表数据 → 给出评论（≥150词，满分15分）"
-
-            if "Part A" in part_type:
-                # 小作文批改提示词（用户提供的详细版）
-                prompt = f"""你是考研英语小作文阅卷AI，经验丰富、洞察深刻。你的点评风格专业严谨、一针见血，同时又极具建设性和鼓励性。
-
-## 评分标准（满分10分）
-考生需根据给出的提示信息，写一篇100词左右的应用文（信函、通知等）。
-
-### 六档评分
-- 第一档 (9-10分) 很好地完成了任务：包含所有内容要点。运用丰富的语法结构和词汇，语言自然流畅，语法错误极少。有效地采用了多种衔接方法，文字连贯，层次清晰。格式与语域恰当贴切。
-- 第二档 (7-8分) 较好地完成了任务：包含所有内容要点，允许漏掉1-2个次重点。使用较丰富的语法结构和词汇，只有在试图使用较复杂结构或较高级词汇时才有个别语法错误。采用了适当的衔接手法，层次清晰，组织较严密。格式与语域较恰当。
-- 第三档 (5-6分) 基本完成了任务：虽漏掉一些内容，但包含多数内容要点。应用的语法结构和词汇能满足任务的需求，有一些语法及词汇错误，但不影响理解。采用了简单的衔接手法，内容较连贯，层次较清晰。格式和语域基本合理。
-- 第四档 (3-4分) 未能按要求完成任务：漏掉或未能有效阐述一些内容要点，写了一些无关内容。语法结构单调、词汇有限，有较多语法结构及词汇方面的错误，影响了对写作内容的理解。未采用恰当的衔接手法，内容缺少连贯性。格式和语域不恰当。
-- 第五档 (1-2分) 未完成任务：明显遗漏主要内容，且有许多不相关的内容。语法和词汇单调、重复，语言错误多，严重影响理解。无衔接，缺少组织、分段。无格式和语域概念。
-- 零分档 (0分)：所传达的信息或所使用语言太少，内容与要求无关或无法辨认。
-
-### 分项评分
-- 内容完整性（3分）：是否覆盖所有内容要点
-- 语言准确性（3分）：语法、词汇、拼写
-- 结构与格式（4分）：格式是否规范，衔接是否流畅
-
-## 输出格式
-
-**得分**
-[总分/10分]
-属于第N档的作文
-
-**分项评估**
-内容完整性：[X分/3分]……
-语言准确性：[X分/3分]……
-结构与格式：[X分/4分]……
-
-**点评 (Comments)**
-优点：总结文章最突出的1-2个优点，尤其肯定其任务完成度和格式规范性
-待改进处：以积极、引导的口吻，指出文章在语气得体性、语言精炼度或细节覆盖上最值得提升的1-2个问题
-具体建议：提供具体的、可操作的修改建议，基于原句优化，不超过4000词汇量
-
-**语法错误检测**
-逐句检查作文，找出所有语法错误，每个错误标注：[错误] 原句 → [修正] 正确写法
-
-**句子升级建议**
-对用户已写的句子，给出更高级、优雅的平替版本：[原句] → [升级]（基于原句优化，不超过4000词汇量）
-
-**修改后版本**
-给出完整的改进后作文。
-
----
-作文题目：{essay_topic if essay_topic else '未指定'}
-作文内容：
-{edited_text}"""
-            else:
-                # 大作文批改提示词（用户提供的详细版）
-                prompt = f"""你是考研英语大作文阅卷AI，经验丰富、洞察深刻。你的点评风格专业严谨、一针见血，同时又极具建设性和鼓励性。你善于发现学生作文中的闪光点并予以肯定，对于不足之处，则以启发式、引导式的口吻提出具体的改进方案。
-
-## 评分标准（满分20分）
-考生需根据给出的提示信息（文字、图画、图表等），写一篇160-200词的短文。
-
-### 五档评分
-- 第五档 (17-20分) 优秀：很好地完成了任务，包含并有效阐述所有内容要点。使用了丰富的语法结构和词汇，错误极少。有效使用了多种衔接手段，内容连贯、流畅，层次清晰。文体格式和语体恰当贴切。
-- 第四档 (13-16分) 良好：较好地完成了任务，包含所有内容要点，少数要点阐述不够充分。使用了较丰富的语法结构和词汇，仅在尝试复杂结构/词汇时有个别错误。比较有效地使用了一些衔接手段，内容较连贯，层次较清晰。
-- 第三档 (9-12分) 合格：基本完成了任务，虽漏掉一些内容，但包含多数要点。语法结构和词汇基本满足需求，存在一些错误，但基本不影响理解。使用了简单的衔接手段，内容基本连贯，层次基本清晰。
-- 第二档 (5-8分) 较差：未能按要求完成任务，漏掉或未有效阐述要点，有无关内容。语法结构单调，词汇有限，存在较多错误，影响理解。缺乏必要的衔接，内容不连贯。
-- 第一档 (1-4分) 很差：明显遗漏主要内容，有大量不相关内容。语法结构很单调，词汇很有限，语言错误很多，内容很难理解。
-
-### 分项评分（各5分，共20分）
-- 内容：是否覆盖并有效阐述所有任务点（描述、寓意、评论）
-- 语言：语法结构和词汇是否丰富多样，语言表达是否准确、规范
-- 结构：结构是否合理，层次是否清晰，衔接是否流畅
-- 语体：文体格式和语体是否恰当
-
-### 特别说明
-- 引用扣分：使用提示语中的部分或整个语句，将被酌情扣分
-- 词数要求：不符合160-200词的要求将酌情扣分
-- 拼写与标点：视为语言准确性的一个方面，视其对交际的影响程度予以考虑
-
-## 输出格式
-
-**得分**
-[总分/20分]
-属于第N档的作文
-
-**分项评估**
-内容：[X分/5分]……
-语言：[X分/5分]……
-结构：[X分/5分]……
-语体：[X分/5分]……
-
-**点评 (Comments)**
-优点：总结文章最突出的1-2个优点，尤其肯定其思路与结构
-待改进处：以积极、引导的口吻，指出文章在内容、结构或语言上最值得提升的1-2个问题
-具体建议：提供具体的、可操作的修改建议，基于原句优化，不超过4000词汇量
-
-**语法错误检测**
-逐句检查作文，找出所有语法错误：
-- 时态错误、主谓一致、冠词使用、介词搭配
-- 从句结构、虚拟语气、非谓语动词
-- 拼写错误、标点错误
-每个错误标注：[错误] 原句 → [修正] 正确写法
-
-**句子升级建议**
-对用户已写的句子，给出更高级、优雅的平替版本：
-[原句] 用户写的句子 → [升级] 更优雅的版本（基于原句优化，不超过4000词汇量）
-
-**修改后版本**
-给出完整的改进后作文。
-
----
-考试类型：{exam_type}
-题型：{part_desc}
-任务要求：{task_desc}
-作文题目：{essay_topic if essay_topic else '未指定'}
-作文内容：
-{edited_text}"""
             with st.spinner("批改中..."):
                 try:
-                    data = {"model": "mimo-v2.5", "messages": [
-                        {"role": "user", "content": prompt}
-                    ], "max_tokens": 3000, "temperature": 0.3}
-                    req = urllib.request.Request(API_BASE + "/chat/completions",
-                        data=json.dumps(data).encode("utf-8"),
-                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                        method="POST")
-                    with urllib.request.urlopen(req, timeout=120) as resp:
-                        result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
+                    result = grade_essay(
+                        exam_type=exam_type,
+                        part_type=part_type,
+                        essay_topic=essay_topic,
+                        edited_text=edited_text,
+                    )
                     st.markdown("---")
                     st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
                     st.components.v1.html("<script>if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],throwOnError:!1})}</script>", height=0)
@@ -4666,34 +3864,9 @@ if st.session_state.page == "english":
             sentence_submitted = st.form_submit_button("解析", use_container_width=True, type="primary")
 
         if sentence_submitted and sentence_text.strip():
-            prompt = f"""你是考研英语长难句解析专家。按以下步骤解析：
-
-1. 找主干：主语 + 谓语 + 宾语
-2. 标修饰：定语从句、状语从句、插入语、同位语等
-3. 理逻辑：因果、转折、并列等逻辑关系
-4. 译全文：准确中文翻译
-5. 语法点：涉及的语法知识点
-
-输出格式：
-[主干] 主语 + 谓语 + 宾语
-[修饰] 各修饰成分分析
-[逻辑] 句子逻辑关系
-[翻译] 中文翻译
-[语法点] 涉及的语法知识点
-
-待解析句子：
-{sentence_text}"""
             with st.spinner("解析中..."):
                 try:
-                    data = {"model": "mimo-v2.5", "messages": [
-                        {"role": "user", "content": prompt}
-                    ], "max_tokens": 1500, "temperature": 0.3}
-                    req = urllib.request.Request(API_BASE + "/chat/completions",
-                        data=json.dumps(data).encode("utf-8"),
-                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                        method="POST")
-                    with urllib.request.urlopen(req, timeout=90) as resp:
-                        result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
+                    result = analyze_english_sentence(sentence_text)
                     st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
                     log_visit("长难句解析", sentence_text[:40])
                 except Exception as e:
@@ -4711,34 +3884,9 @@ if st.session_state.page == "english":
             translate_submitted = st.form_submit_button("开始练习", use_container_width=True, type="primary")
 
         if translate_submitted and translate_text.strip():
-            mode_prompts = {
-                "英译中": "将以下英文翻译为中文，给出准确译文 + 关键词汇解析 + 语法结构 + 翻译技巧",
-                "中译英": "将以下中文翻译为英文，给出准确译文 + 关键词汇 + 语法结构 + 写作技巧",
-                "7选5": "你是考研英语新题型专家（7选5）。分析上下文逻辑，从选项中选出最佳答案填入空白处",
-                "排序题": "你是考研英语新题型专家（排序题）。找段落间的衔接词和逻辑关系，给出正确排序",
-                "小标题匹配": "你是考研英语新题型专家（小标题匹配）。提炼每段主旨，匹配最佳标题",
-            }
-            prompt = f"""{mode_prompts.get(translate_mode, '')}
-
-输出格式：
-[答案/翻译] 准确译文或答案
-[关键词] 重要词汇解析
-[语法] 涉及的语法结构
-[技巧] 使用的解题技巧
-
-待处理文本：
-{translate_text}"""
             with st.spinner("处理中..."):
                 try:
-                    data = {"model": "mimo-v2.5", "messages": [
-                        {"role": "user", "content": prompt}
-                    ], "max_tokens": 1500, "temperature": 0.3}
-                    req = urllib.request.Request(API_BASE + "/chat/completions",
-                        data=json.dumps(data).encode("utf-8"),
-                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                        method="POST")
-                    with urllib.request.urlopen(req, timeout=90) as resp:
-                        result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
+                    result = process_translation_exercise(translate_mode, translate_text)
                     st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
                     log_visit("英语翻译", f"{translate_mode}: {translate_text[:30]}")
                 except Exception as e:
@@ -4753,33 +3901,9 @@ if st.session_state.page == "english":
             vocab_submitted = st.form_submit_button("查询", use_container_width=True, type="primary")
 
         if vocab_submitted and vocab_input.strip():
-            prompt = f"""你是考研英语单词记忆专家。针对以下单词或主题，提供：
-
-1. 词根词缀分析
-2. 联想记忆法
-3. 同义词/反义词
-4. 常考搭配
-5. 经典例句（考研真题风格）
-
-输出格式：
-[词根] 词根词缀拆解
-[联想] 记忆联想
-[同义] 同义词 / [反义] 反义词
-[搭配] 常考搭配
-[例句] 经典例句
-
-单词/主题：{vocab_input}"""
             with st.spinner("查询中..."):
                 try:
-                    data = {"model": "mimo-v2.5", "messages": [
-                        {"role": "user", "content": prompt}
-                    ], "max_tokens": 1000, "temperature": 0.3}
-                    req = urllib.request.Request(API_BASE + "/chat/completions",
-                        data=json.dumps(data).encode("utf-8"),
-                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                        method="POST")
-                    with urllib.request.urlopen(req, timeout=60) as resp:
-                        result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
+                    result = lookup_english_vocab(vocab_input)
                     st.markdown(_escape_md(_collapse_math(_fix_latex(result))))
                     log_visit("英语单词记忆", vocab_input[:30])
                 except Exception as e:
@@ -4971,15 +4095,7 @@ if st.session_state.page == "checkin":
         anxiety = profile.get("anxiety_level") or 3
 
         # 自动判断当前阶段
-        current_month = datetime.now().month
-        if 3 <= current_month <= 6:
-            current_phase = "基础阶段"
-        elif 7 <= current_month <= 9:
-            current_phase = "强化阶段"
-        elif 10 <= current_month <= 11:
-            current_phase = "提升阶段"
-        else:
-            current_phase = "冲刺阶段"
+        current_phase = determine_phase()
 
         # 阶段说明卡片
         st.markdown(f"""
@@ -4991,26 +4107,14 @@ if st.session_state.page == "checkin":
                     <th style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px); text-align:left;">时间</th>
                     <th style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px); text-align:left;">核心任务</th>
                 </tr>
-                <tr style="background:{'#eef2ff' if current_phase=='基础阶段' else '#fff'}">
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">基础阶段</td>
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">3-6月</td>
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">全面打基础、吃透教材和基础题</td>
-                </tr>
-                <tr style="background:{'#eef2ff' if current_phase=='强化阶段' else '#f8fafc'}">
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">强化阶段</td>
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">7-9月</td>
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">专项突破、大量刷题、建立做题体系</td>
-                </tr>
-                <tr style="background:{'#eef2ff' if current_phase=='提升阶段' else '#fff'}">
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">提升阶段</td>
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">10-11月</td>
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">真题实战、查漏补缺、模考检验</td>
-                </tr>
-                <tr style="background:{'#eef2ff' if current_phase=='冲刺阶段' else '#f8fafc'}">
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">冲刺阶段</td>
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">12月</td>
-                    <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">高频考点押题、心理调整、保持手感</td>
-                </tr>
+                {''.join([
+                    f"<tr style=\"background:{'#eef2ff' if current_phase == phase else ('#fff' if index % 2 == 0 else '#f8fafc')}\">"
+                    f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{phase}</td>"
+                    f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{period}</td>"
+                    f"<td style=\"padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);\">{focus}</td>"
+                    f"</tr>"
+                    for index, (phase, period, focus) in enumerate(build_phase_guide_rows())
+                ])}
             </table>
         </div>
         """, unsafe_allow_html=True)
@@ -5029,37 +4133,14 @@ if st.session_state.page == "checkin":
 
         # 生成计划
         if submit_plan and plan_subjects:
-            # 构建 prompt
-            subjects_str = "、".join(plan_subjects)
-            gap_desc = ""
-            if target_schools and target_schools != "未设置":
-                gap_desc = f"目标院校：{target_schools}，目标专业：{target_major}"
-                if undergraduate_level and undergraduate_level != "未设置":
-                    gap_desc += f"，本科院校：{undergraduate_level}"
-                if is_cross_major == "是":
-                    gap_desc += "，跨考生"
-
-            prompt = f"""结合用户基础和院校差距，生成一份实用、可执行的学习计划。
-
-## 用户画像
-- {gap_desc if gap_desc else '目标院校：未设置'}
-- 本专业：{undergraduate_major}
-- 强科：{', '.join(strong_subjects) if strong_subjects else '未设置'}
-- 弱科：{', '.join(weak_subjects) if weak_subjects else '未设置'}
-- 焦虑程度：{anxiety}/5
-- 当前阶段：{plan_phase}
-- 学习科目：{subjects_str}
-- 每日学习时长：{daily_hours}小时
-
-## 输出要求
-请按科目分段，每段给出具体的复习安排和建议。
-要求：
-1. 直接给出复习安排，不写鼓励、共情或称呼（如"亲爱的同学""孩子""老师"）
-2. 语气朴素、理性，像说明文档而非个人书信
-3. 结合用户的院校差距，说明该阶段的学习重点
-4. 结合强弱科，给出针对性建议
-5. 可用短段落 + 要点形式，总字数约 400-600 字
-"""
+            prompt = build_checkin_plan_prompt(
+                profile=profile,
+                plan_phase=plan_phase,
+                plan_subjects=plan_subjects,
+                daily_hours=daily_hours,
+                display_target_schools_fn=_display_target_schools,
+                json_loads_fn=_safe_json_loads,
+            )
             with st.spinner("正在生成学习计划..."):
                 try:
                     result = call_llm_api(prompt, model="mimo-v2.5")
@@ -5194,14 +4275,18 @@ if st.session_state.page == "checkin":
             anxiety = st.slider("焦虑程度", 1, 5, value=int(existing_profile.get("anxiety_level") or 3))
             
             if st.form_submit_button("保存画像", use_container_width=True, type="primary"):
-                save_profile_field(checkin_user_id, "target_schools", json.dumps({"冲刺": target_school}, ensure_ascii=False) if target_school else "")
-                save_profile_field(checkin_user_id, "target_major", target_major)
-                save_profile_field(checkin_user_id, "undergraduate_major", undergraduate_major)
-                save_profile_field(checkin_user_id, "undergraduate_level", undergraduate_level)
-                save_profile_field(checkin_user_id, "is_cross_major", is_cross_major)
-                save_profile_field(checkin_user_id, "strong_subjects", json.dumps(strong, ensure_ascii=False))
-                save_profile_field(checkin_user_id, "weak_subjects", json.dumps(weak, ensure_ascii=False))
-                save_profile_field(checkin_user_id, "anxiety_level", anxiety)
+                profile_payload = build_profile_form_payload(
+                    target_school=target_school,
+                    target_major=target_major,
+                    undergraduate_major=undergraduate_major,
+                    undergraduate_level=undergraduate_level,
+                    is_cross_major=is_cross_major,
+                    strong_subjects=strong,
+                    weak_subjects=weak,
+                    anxiety_level=anxiety,
+                )
+                for field, value in profile_payload.items():
+                    save_profile_field(checkin_user_id, field, value)
                 st.success("画像已保存！生成学习计划时会自动参考。")
                 st.rerun()
 
@@ -5209,14 +4294,8 @@ if st.session_state.page == "checkin":
         st.markdown("---")
         st.subheader("当前画像")
         if existing_profile:
-            st.markdown(f"**目标院校**：{_display_target_schools(existing_profile)}")
-            st.markdown(f"**目标专业**：{existing_profile.get('target_major') or '未设置'}")
-            st.markdown(f"**本专业**：{existing_profile.get('undergraduate_major') or '未设置'}")
-            st.markdown(f"**本科院校级别**：{existing_profile.get('undergraduate_level') or '未设置'}")
-            st.markdown(f"**是否跨考**：{existing_profile.get('is_cross_major') or '否'}")
-            st.markdown(f"**强科**：{', '.join(_safe_json_loads(existing_profile.get('strong_subjects'))) or '未设置'}")
-            st.markdown(f"**弱科**：{', '.join(_safe_json_loads(existing_profile.get('weak_subjects'))) or '未设置'}")
-            st.markdown(f"**焦虑程度**：{existing_profile.get('anxiety_level') or '未设置'}/5")
+            for label, value in build_profile_display_items(existing_profile):
+                st.markdown(f"**{label}**：{value}")
         else:
             st.info("尚未建档，请填写上方问卷。")
 
@@ -5324,7 +4403,6 @@ with mid_col:
 
         raw_full = ""
         output = None
-        import time as _time
 
         for event in run_pipeline(query or "请识别并解答图中的数学题目", results, st.session_state.selected_model, img_data):
             if event["type"] == "token":
@@ -5332,19 +4410,17 @@ with mid_col:
             elif event["type"] == "done":
                 output = event["result"]
 
+        turn = complete_math_qa_turn(
+            query=query or "请识别并解答图中的数学题目",
+            output=output or {},
+            raw_full=raw_full,
+            results=results,
+            matcher_fn=smart_match_knowledge,
+        )
+
         # 流结束后，打字效果显示 [ANSWER] 部分
         thinking_placeholder.empty()
-        answer_text = ""
-        if output and output.get("answer"):
-            answer_text = output["answer"]
-        elif raw_full:
-            # fallback: 从原始文本中提取
-            if "[ANSWER]" in raw_full:
-                answer_text = raw_full.split("[ANSWER]", 1)[1]
-                if "[KNOWLEDGE]" in answer_text:
-                    answer_text = answer_text.split("[KNOWLEDGE]")[0]
-            else:
-                answer_text = raw_full
+        answer_text = turn.answer_text
 
         if answer_text.strip():
             answer_placeholder = st.empty()
@@ -5361,31 +4437,26 @@ with mid_col:
         log_visit("提问", f"{query[:50]}")
 
         # 知识点归纳（用 ALIAS 表归一化为实际文件名）
-        if output.get("knowledge"):
-            validated = []
-            for kid in output["knowledge"]:
-                match = smart_match_knowledge(kid.strip())
-                validated.append(match[0] if len(match) > 0 else kid.strip())
-            validated = list(dict.fromkeys(validated))
-            for kid in validated:
+        if turn.matched_knowledge:
+            for kid in turn.matched_knowledge:
                 update_memory(kid, False, error_type="自动归纳")
-            add_thinking(f"自动归纳知识点: {validated}")
-            st.session_state._matched_knowledge = validated
+            add_thinking(f"自动归纳知识点: {turn.matched_knowledge}")
+            st.session_state._matched_knowledge = turn.matched_knowledge
 
         # 参考来源
-        if results:
+        if turn.references:
             st.markdown("### 使用的参考资料")
             ref_html = ""
-            for r in results:
+            for r in turn.references:
                 ref_html += f"<span class='ref-tag'>📄 {_clean_knowledge_name(r['id'])} ×{r['score']}</span>"
             st.markdown(ref_html, unsafe_allow_html=True)
         else:
             st.caption("📡 回答来自LLM自身知识")
 
         # 保存上下文到 session_state（供后续按钮使用）
-        st.session_state._last_output = output
+        st.session_state._last_output = turn.output
         st.session_state._last_query = query
-        st.session_state._last_results = results
+        st.session_state._last_results = turn.references
 
     elif st.session_state.get("_last_answer_text"):
         # 重新渲染上次回答（如切标签页 WebSocket 断连后 rerun，submitted=False 但答案仍在）
@@ -5735,18 +4806,16 @@ with tab4:
             if st.button("识别图片文字", key="feynman_ocr", use_container_width=True):
                 with st.spinner("识别中..."):
                     try:
-                        ocr_data = {"model": "mimo-v2.5", "messages": [
-                            {"role": "user", "content": [
+                        ocr_result = chat_completion_text(
+                            messages=[{"role": "user", "content": [
                                 {"type": "text", "text": "请识别这张图片中的数学题目内容，只输出题目文字。"},
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                            ]}
-                        ], "max_tokens": 1000, "temperature": 0}
-                        req = urllib.request.Request(API_BASE + "/chat/completions",
-                            data=json.dumps(ocr_data).encode("utf-8"),
-                            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                            method="POST")
-                        with urllib.request.urlopen(req, timeout=30) as resp:
-                            ocr_result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                            ]}],
+                            model="mimo-v2.5",
+                            max_tokens=1000,
+                            temperature=0,
+                            timeout=30,
+                        )
                         st.session_state._feynman_ocr = ocr_result
                         st.rerun()
                     except Exception as e:

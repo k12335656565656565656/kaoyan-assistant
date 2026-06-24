@@ -5,14 +5,22 @@
 import json
 import os
 import sqlite3
+import sys
 import time
 import urllib.request
 import urllib.error
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
+from services.knowledge_match_service import build_knowledge_index, smart_match_knowledge
+
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+
+load_dotenv()
 
 # ==================== 配置 ====================
-API_KEY = os.environ.get("AI_API_KEY", "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6")
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
 MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5")
 MEMORY_DB = "data/memory.db"
@@ -156,65 +164,11 @@ def test_main_llm_call(query, context):
 
 def test_smart_match_knowledge(query, corpus):
     """测试知识匹配（LLM 提取概念 + 本地匹配）"""
-    # Step 1: LLM 提取概念
-    messages = [
-        {"role": "system", "content": "从以下考研数学问题中提取1-3个核心知识点名称（每行一个，不要编号）。"},
-        {"role": "user", "content": query},
-    ]
-    concept_result, concept_time = call_api("mimo-v2.5", messages, max_tokens=500, timeout=20)
-
-    if concept_result.startswith("[ERROR]"):
-        return [], concept_time, 0
-
-    concepts = [c.strip().strip("-•*") for c in concept_result.split("\n") if c.strip()]
-
-    # Step 2: 本地匹配
     match_start = time.perf_counter()
-
-    def _to_bigrams(text):
-        text = text.strip()
-        if len(text) < 2:
-            return {text}
-        return {text[i:i+2] for i in range(len(text) - 1)}
-
-    def _jaccard(set_a, set_b):
-        if not set_a or not set_b:
-            return 0.0
-        return len(set_a & set_b) / len(set_a | set_b)
-
-    # 构建索引
-    idx = {"doc_names": [], "title_map": {}, "title_kw": {}, "content_terms": {}}
-    for doc in corpus:
-        fname = doc["id"]
-        text = doc["text"]
-        idx["doc_names"].append(fname)
-        title_line = ""
-        for line in text.split("\n"):
-            s = line.strip()
-            if s.startswith("# "):
-                title_line = s.lstrip("# ").strip()
-                break
-        idx["title_map"][fname] = title_line or fname
-        idx["title_kw"][fname] = _to_bigrams(title_line or fname)
-        idx["content_terms"][fname] = set(_to_bigrams(text[:3000]))
-
-    # 匹配
-    matched = []
-    for concept in concepts:
-        c_lower = concept.lower()
-        c_bg = _to_bigrams(c_lower)
-        for doc_name in idx["doc_names"]:
-            title = idx["title_map"].get(doc_name, "").lower()
-            if c_lower in title or title in c_lower:
-                matched.append(doc_name)
-                continue
-            sim = _jaccard(c_bg, idx["title_kw"].get(doc_name, set()))
-            if sim > 0.3:
-                matched.append(doc_name)
-
+    idx = build_knowledge_index(corpus)
+    matched = smart_match_knowledge(query, index=idx, allow_llm=False)
     match_time = time.perf_counter() - match_start
-    matched = list(dict.fromkeys(matched))[:3]
-    return matched, concept_time, match_time
+    return matched[:3], 0.0, match_time
 
 def test_update_memory(kid):
     """测试数据库写入"""

@@ -8,7 +8,7 @@
 ## 1. 安装依赖
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements_kb.txt
 ```
 
 ## 2. 配置 API Key
@@ -42,10 +42,18 @@ export UMI_OCR_URL="http://localhost:1224"                 # 本地OCR服务
 ## 3. 启动
 
 ```bash
-streamlit run app.py --server.port 8501
+python -m streamlit run app_kb.py --server.port 8501
 ```
 
 浏览器打开 `http://localhost:8501`
+
+Windows 也可以直接双击 `启动知识库.bat`。
+
+本模块也可以被主站直接挂载，入口函数为：
+
+```python
+from professional_knowledge import render_professional_knowledge_system
+```
 
 ## 4. 目录结构
 

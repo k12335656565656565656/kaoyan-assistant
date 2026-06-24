@@ -56,3 +56,20 @@ def analyze_text_quality(text, page_count=1, empty_page_count=0):
         "warnings": warnings,
         "confidence": confidence,
     }
+
+
+def merge_pdf_risk_into_quality(quality, pdf_diagnostics=None):
+    pdf_diagnostics = pdf_diagnostics or {}
+    merged = dict(quality)
+    warnings = list(merged.get("warnings") or [])
+
+    if pdf_diagnostics.get("needs_ocr"):
+        warnings.append("检测到图片主导且重复水印明显的 PDF，建议跳过文字层直提并直接 OCR。")
+        for reason in pdf_diagnostics.get("reasons") or []:
+            warnings.append(f"PDF 检测：{reason}")
+        merged["acceptable"] = False
+        merged["confidence"] = min(merged.get("confidence", 0.9), 0.3)
+
+    merged["warnings"] = warnings
+    merged["pdf_diagnostics"] = pdf_diagnostics
+    return merged

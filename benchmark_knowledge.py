@@ -1,13 +1,16 @@
 """知识点归纳基准测试 — 50题"""
-import urllib.request, json, sys, io, time
-from difflib import get_close_matches
+import json
+import sys
+import io
+import time
 from pathlib import Path
+from dotenv import load_dotenv
+from services.knowledge_match_service import build_knowledge_index, smart_match_knowledge
 
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-KEY = "sk-Sav7yLJqAZ6FxCiXy2kCOOSelXOiDceY1YzhtCNsJArcu1dx"
-BASE = "https://aiberm.com/v1"
+load_dotenv()
 
 def load_corpus_ids():
     ids = []
@@ -15,24 +18,6 @@ def load_corpus_ids():
         if f.suffix == ".md":
             ids.append(f.name)
     return ids
-
-def call_llm(query):
-    data = json.dumps({
-        "model": "gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": "输出问题涉及的知识点概念名称（多个用逗号分隔）。如: 导数, 定积分, 矩阵"},
-            {"role": "user", "content": f"以下问题涉及哪些考研数学知识点：{query}"}
-        ],
-        "max_tokens": 100, "temperature": 0
-    }).encode()
-    req = urllib.request.Request(BASE + "/chat/completions", data=data,
-        headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + KEY}, method='POST')
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            raw = json.loads(r.read())['choices'][0]['message']['content'].strip()
-            return [k.strip() for k in raw.split(",") if k.strip()]
-    except:
-        return [""]
 
 # 50题 — 覆盖不同用户画像
 tests = [
@@ -98,64 +83,21 @@ tests = [
     ("差分方程在考研里重要吗", ["107-差分方程基础.md"]),
 ]
 
-ALIAS = {
-    "导数": "004-导数的定义与几何意义.md", "求导": "005-导数的计算法则.md",
-    "积分": "010-不定积分的概念与性质.md", "定积分": "012-定积分的定义与性质.md",
-    "方差": "098-二次型标准化.md", "标准差": "098-二次型标准化.md",
-    "正态分布": "047-常见连续分布.md", "正态": "047-常见连续分布.md",
-    "随机变量": "045-随机变量及其分布.md", "分布函数": "045-随机变量及其分布.md",
-    "特征值": "031-特征值与特征向量.md", "特征向量": "031-特征值与特征向量.md",
-    "洛必达": "007-洛必达法则.md",
-    "秩": "091-矩阵的秩.md",
-    "无穷小": "003-函数的连续性与间断点.md",
-    "级数": "067-无穷级数.md", "收敛": "086-常数项级数审敛.md",
-    "极大无关组": "029-向量组的秩.md", "向量组的秩": "029-向量组的秩.md",
-    "二重积分": "065-二重积分与三重积分.md",
-    "方向导数": "102-方向导数与梯度.md", "梯度": "102-方向导数与梯度.md",
-    "线性相关": "092-向量组的线性相关性.md",
-    "幂级数": "087-幂级数展开与求和.md", "收敛半径": "087-幂级数展开与求和.md",
-    "傅里叶": "104-傅里叶级数.md", "傅里叶级数": "104-傅里叶级数.md",
-    "空间曲面": "103-空间曲面与空间曲线.md", "空间曲线": "103-空间曲面与空间曲线.md",
-    "基变换": "109-基变换与过渡矩阵.md", "过渡矩阵": "109-基变换与过渡矩阵.md",
-    "常微分方程": "066-常微分方程总结.md", "微分方程": "016-一阶微分方程.md",
-    "概率公式": "052-随机变量的数字特征.md",
-    "矩阵概念": "023-矩阵的概念与运算.md", "矩阵基础": "023-矩阵的概念与运算.md",
-    "连续": "003-函数的连续性与间断点.md", "可导": "004-导数的定义与几何意义.md",
-    "线性代数综合": "070-线性代数综合一.md",
-}
-
 corpus_ids = load_corpus_ids()
+corpus = []
+for f in sorted(Path("data/corpus").iterdir()):
+    if f.suffix == ".md":
+        corpus.append({"id": f.name, "text": f.read_text(encoding="utf-8", errors="ignore")})
+index = build_knowledge_index(corpus)
 results = []
 print(f"{'ID':<5} {'问题':<32} {'归一化后文档':<42} {'预期关键词':<18} {'结果':>4}")
 print("-" * 110)
 
 for i, (query, expected) in enumerate(tests, 1):
-    raw = call_llm(query)
-    validated = []
-    for kid in raw:
-        k = kid.strip()
-        # Layer 0: 别名直接命中
-        if k in ALIAS:
-            validated.append(ALIAS[k])
-            continue
-        found = False
-        for alias_key, alias_doc in ALIAS.items():
-            if alias_key in k or k in alias_key:
-                validated.append(alias_doc)
-                found = True
-                break
-        if found:
-            continue
-        # Layer 1: difflib + 短名优先
-        close = get_close_matches(k, corpus_ids, n=3, cutoff=0.1)
-        if close:
-            close.sort(key=len)
-            validated.append(close[0])
-        else:
-            validated.append(k)
+    validated = smart_match_knowledge(query, index=index, allow_llm=False)
     
     passed = any(e in " ".join(validated) for e in expected)
-    results.append({"id": i, "query": query, "raw": raw, "validated": validated, "expected": expected, "passed": passed})
+    results.append({"id": i, "query": query, "validated": validated, "expected": expected, "passed": passed})
     
     val_s = ",".join([v[:22] for v in validated])[:40]
     exp_s = expected[0][:16] if expected else "?"

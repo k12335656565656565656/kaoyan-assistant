@@ -12,6 +12,12 @@ class MaterialResult:
     extracted_text: str
     confidence: float
     warnings: List[str] = field(default_factory=list)
+    raw_extracted_text: str = ""
+    page_count: int = 0
+    empty_page_count: int = 0
+    pdf_diagnostics: dict = field(default_factory=dict)
+    ocr_report: dict = field(default_factory=dict)
+    clean_report: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)

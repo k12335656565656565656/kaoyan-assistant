@@ -8,7 +8,7 @@
 ## 1. 安装依赖
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 当前依赖以 `requirements.txt` 为准，其中还包括 `extra-streamlit-components`、`python-docx`、`lxml`、`python-dotenv`、`PyMuPDF`、`requests`。
@@ -45,17 +45,18 @@ export MEMORY_DB="data/memory.db"
 
 **Linux/Mac**:
 ```bash
-streamlit run app.py --server.port 8501
+python -m streamlit run app.py --server.port 8505
 ```
 
-浏览器打开 `http://localhost:8501`
+浏览器打开 `http://localhost:8505`
 
 ## 4. 目录结构
 
 ```
 ├── app.py              # 主程序
 ├── requirements.txt    # 依赖
-├── 启动.bat            # Windows启动脚本
+├── 启动.bat            # Windows主站启动脚本
+├── 启动知识库.bat      # Windows知识库启动脚本
 ├── data/
 │   ├── corpus/         # 110个考研数学知识点 (md)
 │   └── memory.db       # SQLite用户数据库 (自动创建)
@@ -66,7 +67,7 @@ streamlit run app.py --server.port 8501
 ## 5. 常见问题
 
 **Q: `ModuleNotFoundError: No module named 'streamlit'`**
-A: 执行 `pip install -r requirements.txt`
+A: 执行 `python -m pip install -r requirements.txt`
 
 **Q: API Key 未设置**
 A: 首页会显示提示，按第2步设置环境变量

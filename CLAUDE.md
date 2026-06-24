@@ -6,7 +6,7 @@
 
 ## 技术栈
 
-- **Python** 3.13 (`C:\Users\H.D.B\AppData\Local\Python\bin\python.exe`)
+- **Python** 3.13（使用本机可用的 Python 3.13 解释器）
 - **框架**: Streamlit (无前后端分离，纯 `app.py`)
 - **数据库**: SQLite `data/memory.db`（多用户隔离，`user_id` 区分）
 - **API**: 小米 MiMo v2.5，endpoint `https://api.xiaomimimo.com/v1`，模型 `mimo-v2.5`
@@ -24,7 +24,7 @@
 | `recommend.py` | 同事 PR — 学习资料推荐模块 |
 | `kaoyan_predict.py` | 高校热度预测引擎（Node.js 子进程） |
 | `pack.py` | 打包脚本 → `KaoyanRAG-v4.2.zip`（含 corpus/skills/katex/predict） |
-| `copy_to_git.py` | 从 dev 目录同步到 `C:\Users\H.D.B\Desktop\git\`，用于 GitHub 发布 |
+| `copy_to_git.py` | 从开发目录同步到另一个 Git 工作目录，用于发布 |
 
 ## 关键架构
 
@@ -96,7 +96,7 @@ Feature Cards: SVG 图标 + 玻璃材质 + 呼吸动画 + <a> 整卡可点
 ## API 配置
 
 ```python
-API_KEY = "sk-c4f69ncnuomnc8pprclmhlasndea7tdjvxeo49jno3bzxpa6"
+API_KEY = os.environ.get("AI_API_KEY", "")
 API_BASE = "https://api.xiaomimimo.com/v1"
 MODEL = "mimo-v2.5"
 MAX_TOKENS = 1500
@@ -116,8 +116,8 @@ MAX_TOKENS = 1500
 python pack.py  # → KaoyanRAG-v4.2.zip (~200 文件, ~4MB)
 
 # 服务器部署
-scp KaoyanRAG-v4.2.zip ubuntu@111.229.102.178:/home/ubuntu/
-ssh ubuntu@111.229.102.178
+scp KaoyanRAG-v4.2.zip ubuntu@your-server:/home/ubuntu/
+ssh ubuntu@your-server
 cd /home/ubuntu && python3 -c "import zipfile; zipfile.ZipFile('KaoyanRAG-v4.2.zip').extractall('kaoyan/')"
 source /home/ubuntu/kaoyan/venv/bin/activate
 pip install python-docx lxml -q
@@ -130,7 +130,7 @@ nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.
 - **页面标题保持「考研学习助手」不改**
 - **不引入新的 pip 依赖**，保持最小依赖集
 - MiMo 思维链模型：`content` 为空时用 `reasoning_content`，全局用 `_extract_content()` 处理
-- `python-dotenv` 已移除，API Key 直接硬编码（避免服务器环境变量问题）
+- 使用环境变量或 `.env` 管理 API Key，不在代码仓库内硬编码
 - 不 mock 纯函数模块，不引入 `as any` 到生产代码
 - 打包时需确认 `data/katex/`、`data/reference/template.docx`、`templates/` 均被包含
 
