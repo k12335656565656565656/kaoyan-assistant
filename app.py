@@ -2244,7 +2244,7 @@ def generate_review_questions(knowledge_points):
         kb_list = "\n".join(kb_lines)
         context_text = "\n\n".join(contexts) if contexts else ""
 
-        system_prompt = """你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
+        system_prompt = r"""你是考研数学辅导专家。请直接输出1道练习题，不要输出任何思考过程或内心独白。
 
 ⚠️ 题目必须紧扣知识点核心概念，不得偏题。
 ⚠️ 直接输出题目内容，不要输出"首先"、"我需要"等思考过程。

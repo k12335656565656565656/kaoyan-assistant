@@ -20,4 +20,22 @@ jobs:
           python-version: "3.11"
 
       - name: Compile Python sources
-        run: python -m compileall .
+        run: |
+          python -m compileall -q \
+            admin.py \
+            app.py \
+            app_kb.py \
+            benchmark_knowledge.py \
+            benchmark_mimo_fields.py \
+            benchmark_qa.py \
+            kaoyan_predict.py \
+            knowledge_base.py \
+            pack.py \
+            pack_kb.py \
+            pack_portable.py \
+            recommend.py \
+            professional_knowledge \
+            repositories \
+            schemas \
+            services \
+            tests
