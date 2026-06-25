@@ -3550,10 +3550,16 @@ def run_pipeline(query, results, model_name, img_data=None):
 {context}"""
 
     if img_data:
-        user_content = [
-            {"type": "text", "text": f"问题：{query}"},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
-        ]
+        # img_data 可以是单张 base64 字符串，也可以是列表（多张图）
+        if isinstance(img_data, list):
+            user_content = [{"type": "text", "text": f"问题：{query}"}]
+            for bd in img_data:
+                user_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{bd}"}})
+        else:
+            user_content = [
+                {"type": "text", "text": f"问题：{query}"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
+            ]
     else:
         user_content = f"问题：{query}"
     model = model_name
@@ -4253,26 +4259,27 @@ if st.session_state.page == "main":
                }
                </style>
                """, unsafe_allow_html=True)
-        _upload = st.file_uploader("上传题目截图（可选）", type=["png","jpg","jpeg"], key="qa_upload")
+        _upload = st.file_uploader("上传题目截图（可选，支持多张）", type=["png","jpg","jpeg"],
+                                    accept_multiple_files=True, key="qa_upload")
         _q = st.text_input("输入你的考研问题", placeholder="例如：什么是导数？如何求泰勒展开？",
                           key="qa_input", label_visibility="collapsed")
         _ask = st.button("提问", use_container_width=True, type="primary")
 
         if _ask and (_q.strip() or _upload):
             user_input = _q.strip()
-            # 处理图片上传
-            if _upload and not user_input:
+            # 处理图片上传（支持多张）
+            import base64 as _b64
+            _img_b64_list = []
+            for _f in (_upload or []):
+                _img_b64_list.append(_b64.b64encode(_f.read()).decode())
+            if _img_b64_list and not user_input:
                 with st.spinner("正在识别图片..."):
-                    import base64 as _b64
-                    img_bytes = _upload.read()
-                    img_b64 = _b64.b64encode(img_bytes).decode()
-                    ocr_prompt = "请识别这张考研数学题目图片中的文字和公式，直接输出题目原文，不要添加任何解释。如有公式请用 LaTeX 格式。"
+                    ocr_content = [{"type": "text", "text": f"请识别这 {len(_img_b64_list)} 张考研数学题目图片中的文字和公式，直接输出题目原文，不要添加任何解释。如有公式请用 LaTeX 格式。"}]
+                    for bd in _img_b64_list:
+                        ocr_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{bd}"}})
                     ocr_data = {
                         "model": "mimo-v2.5",
-                        "messages": [{"role": "user", "content": [
-                            {"type": "text", "text": ocr_prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                        ]}],
+                        "messages": [{"role": "user", "content": ocr_content}],
                         "max_tokens": 500, "temperature": 0.1
                     }
                     try:
@@ -4289,17 +4296,14 @@ if st.session_state.page == "main":
                     except Exception as e:
                         st.error(f"图片识别失败: {e}")
                         user_input = ""
-            elif _upload and user_input:
+            elif _img_b64_list and user_input:
                 with st.spinner("正在分析..."):
-                    import base64 as _b64
-                    img_bytes = _upload.read()
-                    img_b64 = _b64.b64encode(img_bytes).decode()
-                    user_input += "\n[附题目截图]"
+                    user_input += f"\n[附 {len(_img_b64_list)} 张题目截图]"
                     corpus = load_corpus()
                     docs = search_corpus(user_input, corpus, top_k=3)
                     style = st.session_state.get("qa_style", "默认")
                     style_hint = "" if style == "默认" else f"请用{style}的方式回答。"
-                    prompt = f"""{style_hint}你是考研数学辅导专家。用户上传了一道题目截图，请根据以下参考资料解答。
+                    prompt = f"""{style_hint}你是考研数学辅导专家。用户上传了题目截图，请根据以下参考资料解答。
 
 用户问题: {user_input}
 
@@ -4308,12 +4312,12 @@ if st.session_state.page == "main":
                     for i, doc in enumerate(docs):
                         prompt += f"\n[{i+1}] {doc['id']}: {doc['text'][:800]}\n"
                     prompt += "\n请给出准确、有深度的回答。如有公式请用 LaTeX 格式。"
+                    mm_content = [{"type": "text", "text": prompt}]
+                    for bd in _img_b64_list:
+                        mm_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{bd}"}})
                     mm_data = {
                         "model": "mimo-v2.5",
-                        "messages": [{"role": "user", "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                        ]}],
+                        "messages": [{"role": "user", "content": mm_content}],
                         "max_tokens": 2000, "temperature": 0.3
                     }
                     mm_req = urllib.request.Request(
@@ -4344,13 +4348,18 @@ if st.session_state.page == "main":
 
             # 流式渲染：逐 token 实时显示
             stream_placeholder = st.empty()
+            # 阶段A：等待首个 token，左侧竖线容器 + 旋转圆点 + 靛蓝色提示
             stream_placeholder.markdown(
-                '<div style="text-align:center;padding:14px 0;">'
-                '<div style="display:inline-block;width:16px;height:16px;border:2px solid #475569;'
-                'border-top-color:#818cf8;border-radius:50%;'
-                'animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle;"></div>'
-                '<span style="font-size:.92rem;color:#818cf8;font-weight:700;">深度思考中，请耐心等待</span>'
-                '</div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>',
+                '<div style="border-left:3px solid var(--primary,#4f46e5);'
+                'background:var(--primary-soft,#eef2ff);border-radius:0 10px 10px 0;'
+                'padding:12px 16px;margin:6px 0 10px;display:flex;align-items:center;gap:8px;">'
+                '<div style="width:14px;height:14px;flex-shrink:0;'
+                'border:2px solid var(--text-muted,#94a3b8);'
+                'border-top-color:var(--primary,#4f46e5);border-radius:50%;'
+                'animation:spin .7s linear infinite;"></div>'
+                '<span style="font-size:.88rem;font-weight:700;color:var(--primary,#4f46e5);'
+                'letter-spacing:.3px;">正在深度思考中，请耐心等待</span></div>'
+                '<style>@keyframes spin{to{transform:rotate(360deg)}}</style>',
                 unsafe_allow_html=True
             )
 
@@ -4360,18 +4369,58 @@ if st.session_state.page == "main":
             _stream_count = 0
             import time as _stime
             _last_flush = _stime.time()
+            _katex_flush_ct = 0
+            _stage_b = False  # 阶段A→B 切换标记
 
             for event in run_pipeline(user_input, docs, "mimo-v2.5"):
                 if event["type"] == "token":
                     raw_full += event["content"]
                     _stream_buf += event["content"]
                     _stream_count += 1
-                    # 每 5 个 token 或每 0.3 秒刷新一次页面
-                    if _stream_count % 5 == 0 or (_stime.time() - _last_flush) > 0.3:
+                    # 首个 token 到达：阶段A → 阶段B（"思考中"灰色标签 + 流式内容）
+                    if not _stage_b:
+                        _stage_b = True
                         stream_placeholder.markdown(
-                            _escape_md(_collapse_math(_fix_latex(_stream_buf)))
+                            '<div style="border-left:3px solid var(--primary,#4f46e5);'
+                            'background:var(--primary-soft,#eef2ff);border-radius:0 10px 10px 0;'
+                            'padding:12px 16px;margin:6px 0 10px;">'
+                            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+                            '<div style="width:10px;height:10px;flex-shrink:0;'
+                            'border:1.5px solid var(--text-muted,#94a3b8);'
+                            'border-top-color:var(--primary,#4f46e5);border-radius:50%;'
+                            'animation:spin .7s linear infinite;"></div>'
+                            '<span style="font-size:.78rem;font-weight:500;'
+                            'color:var(--text-muted,#94a3b8);letter-spacing:.3px;">思考中</span>'
+                            '</div>'
+                            '<div style="color:var(--text-muted,#94a3b8);font-size:.88rem;line-height:1.7;">'
+                            + _escape_md(_collapse_math(_fix_latex(_stream_buf)))
+                            + '</div></div>',
+                            unsafe_allow_html=True
                         )
                         _last_flush = _stime.time()
+                    # 每 2 个 token 或每 0.25 秒刷新一次页面
+                    elif _stream_count % 2 == 0 or (_stime.time() - _last_flush) > 0.25:
+                        stream_placeholder.markdown(
+                            '<div style="border-left:3px solid var(--primary,#4f46e5);'
+                            'background:var(--primary-soft,#eef2ff);border-radius:0 10px 10px 0;'
+                            'padding:12px 16px;margin:6px 0 10px;">'
+                            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+                            '<div style="width:10px;height:10px;flex-shrink:0;'
+                            'border:1.5px solid var(--text-muted,#94a3b8);'
+                            'border-top-color:var(--primary,#4f46e5);border-radius:50%;'
+                            'animation:spin .7s linear infinite;"></div>'
+                            '<span style="font-size:.78rem;font-weight:500;'
+                            'color:var(--text-muted,#94a3b8);letter-spacing:.3px;">思考中</span>'
+                            '</div>'
+                            '<div style="color:var(--text-muted,#94a3b8);font-size:.88rem;line-height:1.7;">'
+                            + _escape_md(_collapse_math(_fix_latex(_stream_buf)))
+                            + '</div></div>',
+                            unsafe_allow_html=True
+                        )
+                        _last_flush = _stime.time()
+                        _katex_flush_ct += 1
+                        if _katex_flush_ct % 3 == 0:
+                            _katex_refresh()
                 elif event["type"] == "done":
                     output = event["result"]
 
@@ -4380,6 +4429,7 @@ if st.session_state.page == "main":
                 stream_placeholder.markdown(
                     _escape_md(_collapse_math(_fix_latex(_stream_buf)))
                 )
+                _katex_refresh()
 
             answer_text = ""
             if output and output.get("answer"):
@@ -4700,17 +4750,23 @@ if st.session_state.page == "main":
                     key="feynman_topic")
             with col_img:
                 st.markdown('<div style="font-size:0.82rem;font-weight:600;color:var(--text-sub,#64748b);margin-bottom:4px;">或上传题目图片</div>', unsafe_allow_html=True)
-                _fimg = st.file_uploader("上传图片", type=["png", "jpg", "jpeg"], key="feynman_img", label_visibility="collapsed")
-                if _fimg is not None:
-                    img_b64 = base64.b64encode(_fimg.getvalue()).decode()
-                    if st.button("识别图片文字", key="feynman_ocr", use_container_width=True):
+                _fimgs = st.file_uploader("上传图片", type=["png", "jpg", "jpeg"],
+                                          accept_multiple_files=True, key="feynman_img", label_visibility="collapsed")
+                if _fimgs:
+                    _feynman_b64 = []
+                    for _fi in _fimgs:
+                        try:
+                            _feynman_b64.append(base64.b64encode(_fi.getvalue()).decode())
+                        except:
+                            pass
+                    if st.button("识别图片文字", key="feynman_ocr", use_container_width=True) and _feynman_b64:
                         with st.spinner("识别中..."):
                             try:
+                                ocr_content = [{"type": "text", "text": f"请识别这 {len(_feynman_b64)} 张图片中的数学题目内容，只输出题目文字。"}]
+                                for bd in _feynman_b64:
+                                    ocr_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{bd}"}})
                                 ocr_data = {"model": "mimo-v2.5", "messages": [
-                                    {"role": "user", "content": [
-                                        {"type": "text", "text": "请识别这张图片中的数学题目内容，只输出题目文字。"},
-                                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                                    ]}
+                                    {"role": "user", "content": ocr_content}
                                 ], "max_tokens": 1000, "temperature": 0}
                                 req = urllib.request.Request(API_BASE + "/chat/completions",
                                     data=json.dumps(ocr_data).encode("utf-8"),
@@ -5551,21 +5607,26 @@ if st.session_state.page == "english":
         essay_topic = st.text_input("作文题目（选填）", value=st.session_state.get("_essay_topic", ""),
             placeholder="例如：Write a letter to... / The chart shows...")
 
-        # 图片上传 → OCR 识别
-        uploaded_img = st.file_uploader("上传手写作文照片（选填）", type=["png", "jpg", "jpeg"], key="essay_img")
+        # 图片上传 → OCR 识别（支持多张）
+        uploaded_imgs = st.file_uploader("上传手写作文照片（选填，支持多张）", type=["png", "jpg", "jpeg"],
+                                         accept_multiple_files=True, key="essay_img")
         ocr_text = st.session_state.get("_essay_ocr_text", "")
 
-        if uploaded_img is not None:
-            img_data = base64.b64encode(uploaded_img.getvalue()).decode()
-            if st.button("识别照片文字", use_container_width=True):
+        if uploaded_imgs:
+            _essay_b64_list = []
+            for _ef in uploaded_imgs:
+                try:
+                    _essay_b64_list.append(base64.b64encode(_ef.getvalue()).decode())
+                except:
+                    pass
+            if st.button("识别照片文字", use_container_width=True) and _essay_b64_list:
                 with st.spinner("OCR 识别中..."):
                     try:
-                        ocr_prompt = "请识别这张照片中的英语作文内容，只输出英文文本，保持原文格式和段落分隔。"
+                        ocr_content = [{"type": "text", "text": f"请识别这 {len(_essay_b64_list)} 张照片中的英语作文内容，只输出英文文本，保持原文格式和段落分隔。"}]
+                        for bd in _essay_b64_list:
+                            ocr_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{bd}"}})
                         data = {"model": "mimo-v2.5", "messages": [
-                            {"role": "user", "content": [
-                                {"type": "text", "text": ocr_prompt},
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_data}"}}
-                            ]}
+                            {"role": "user", "content": ocr_content}
                         ], "max_tokens": 2000, "temperature": 0}
                         req = urllib.request.Request(API_BASE + "/chat/completions",
                             data=json.dumps(data).encode("utf-8"),
@@ -6385,17 +6446,19 @@ with mid_col:
     st.markdown("### 智能问答")
     with st.form("qa_form", clear_on_submit=False):
         query = st.text_input("输入你的考研问题", placeholder="例如：什么是导数？", key="query_input")
-        uploaded_img = st.file_uploader("题目截图", type=["png","jpg","jpeg"], label_visibility="collapsed")
+        uploaded_imgs = st.file_uploader("题目截图（支持多张）", type=["png","jpg","jpeg"],
+                                         accept_multiple_files=True, label_visibility="collapsed")
         submitted = st.form_submit_button("提问", use_container_width=True)
 
-    img_data = None
-    if uploaded_img is not None:
-        try:
-            img_data = base64.b64encode(uploaded_img.getvalue()).decode()
-        except:
-            pass
+    img_data_list = []
+    if uploaded_imgs:
+        for _uf in uploaded_imgs:
+            try:
+                img_data_list.append(base64.b64encode(_uf.getvalue()).decode())
+            except:
+                pass
 
-    if submitted and (query or img_data):
+    if submitted and (query or img_data_list):
         add_thinking(f"查询: {query[:30]}..." if query else "图片识别...")
         results = search_corpus(query, corpus, top_k=3) if query else []
 
@@ -6404,13 +6467,18 @@ with mid_col:
         st.markdown("### 💡 回答")
 
         stream_placeholder = st.empty()
+        # 阶段A：等待首个 token，左侧竖线容器 + 旋转圆点 + 靛蓝色提示
         stream_placeholder.markdown(
-            '<div style="text-align:center;padding:14px 0;">'
-            '<div style="display:inline-block;width:16px;height:16px;border:2px solid #475569;'
-            'border-top-color:#818cf8;border-radius:50%;'
-            'animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle;"></div>'
-            '<span style="font-size:.92rem;color:#818cf8;font-weight:700;">深度思考中，请耐心等待</span>'
-            '</div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>',
+            '<div style="border-left:3px solid var(--primary,#4f46e5);'
+            'background:var(--primary-soft,#eef2ff);border-radius:0 10px 10px 0;'
+            'padding:12px 16px;margin:6px 0 10px;display:flex;align-items:center;gap:8px;">'
+            '<div style="width:14px;height:14px;flex-shrink:0;'
+            'border:2px solid var(--text-muted,#94a3b8);'
+            'border-top-color:var(--primary,#4f46e5);border-radius:50%;'
+            'animation:spin .7s linear infinite;"></div>'
+            '<span style="font-size:.88rem;font-weight:700;color:var(--primary,#4f46e5);'
+            'letter-spacing:.3px;">正在深度思考中，请耐心等待</span></div>'
+            '<style>@keyframes spin{to{transform:rotate(360deg)}}</style>',
             unsafe_allow_html=True
         )
 
@@ -6420,15 +6488,56 @@ with mid_col:
         _stream_count = 0
         import time as _stime
         _last_flush = _stime.time()
+        _katex_flush_ct = 0
+        _stage_b = False
 
-        for event in run_pipeline(query or "请识别并解答图中的数学题目", results, st.session_state.selected_model, img_data):
+        for event in run_pipeline(query or "请识别并解答图中的数学题目", results, st.session_state.selected_model, img_data_list or None):
             if event["type"] == "token":
                 raw_full += event["content"]
                 _stream_buf += event["content"]
                 _stream_count += 1
-                if _stream_count % 5 == 0 or (_stime.time() - _last_flush) > 0.3:
-                    stream_placeholder.markdown(_stream_buf)
+                if not _stage_b:
+                    _stage_b = True
+                    stream_placeholder.markdown(
+                        '<div style="border-left:3px solid var(--primary,#4f46e5);'
+                        'background:var(--primary-soft,#eef2ff);border-radius:0 10px 10px 0;'
+                        'padding:12px 16px;margin:6px 0 10px;">'
+                        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+                        '<div style="width:10px;height:10px;flex-shrink:0;'
+                        'border:1.5px solid var(--text-muted,#94a3b8);'
+                        'border-top-color:var(--primary,#4f46e5);border-radius:50%;'
+                        'animation:spin .7s linear infinite;"></div>'
+                        '<span style="font-size:.78rem;font-weight:500;'
+                        'color:var(--text-muted,#94a3b8);letter-spacing:.3px;">思考中</span>'
+                        '</div>'
+                        '<div style="color:var(--text-muted,#94a3b8);font-size:.88rem;line-height:1.7;">'
+                        + _escape_md(_collapse_math(_fix_latex(_stream_buf)))
+                        + '</div></div>',
+                        unsafe_allow_html=True
+                    )
                     _last_flush = _stime.time()
+                elif _stream_count % 2 == 0 or (_stime.time() - _last_flush) > 0.25:
+                    stream_placeholder.markdown(
+                        '<div style="border-left:3px solid var(--primary,#4f46e5);'
+                        'background:var(--primary-soft,#eef2ff);border-radius:0 10px 10px 0;'
+                        'padding:12px 16px;margin:6px 0 10px;">'
+                        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+                        '<div style="width:10px;height:10px;flex-shrink:0;'
+                        'border:1.5px solid var(--text-muted,#94a3b8);'
+                        'border-top-color:var(--primary,#4f46e5);border-radius:50%;'
+                        'animation:spin .7s linear infinite;"></div>'
+                        '<span style="font-size:.78rem;font-weight:500;'
+                        'color:var(--text-muted,#94a3b8);letter-spacing:.3px;">思考中</span>'
+                        '</div>'
+                        '<div style="color:var(--text-muted,#94a3b8);font-size:.88rem;line-height:1.7;">'
+                        + _escape_md(_collapse_math(_fix_latex(_stream_buf)))
+                        + '</div></div>',
+                        unsafe_allow_html=True
+                    )
+                    _last_flush = _stime.time()
+                    _katex_flush_ct += 1
+                    if _katex_flush_ct % 3 == 0:
+                        _katex_refresh()
             elif event["type"] == "done":
                 output = event["result"]
 
@@ -6436,6 +6545,7 @@ with mid_col:
             stream_placeholder.markdown(
                 _escape_md(_collapse_math(_fix_latex(_stream_buf)))
             )
+            _katex_refresh()
 
         # 流结束后，处理 [ANSWER] 部分
         answer_text = ""
@@ -6836,18 +6946,24 @@ with tab4:
             key="feynman_question")
     with col_img:
         st.markdown("**或上传题目图片**")
-        feynman_img = st.file_uploader("上传图片", type=["png", "jpg", "jpeg"], key="feynman_img",
+        feynman_imgs = st.file_uploader("上传图片", type=["png", "jpg", "jpeg"],
+                                        accept_multiple_files=True, key="feynman_img",
             label_visibility="collapsed")
-        if feynman_img is not None:
-            img_b64 = base64.b64encode(feynman_img.getvalue()).decode()
-            if st.button("识别图片文字", key="feynman_ocr", use_container_width=True):
+        if feynman_imgs:
+            _feynman_b64_2 = []
+            for _fi2 in feynman_imgs:
+                try:
+                    _feynman_b64_2.append(base64.b64encode(_fi2.getvalue()).decode())
+                except:
+                    pass
+            if st.button("识别图片文字", key="feynman_ocr", use_container_width=True) and _feynman_b64_2:
                 with st.spinner("识别中..."):
                     try:
+                        ocr_content = [{"type": "text", "text": f"请识别这 {len(_feynman_b64_2)} 张图片中的数学题目内容，只输出题目文字。"}]
+                        for bd in _feynman_b64_2:
+                            ocr_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{bd}"}})
                         ocr_data = {"model": "mimo-v2.5", "messages": [
-                            {"role": "user", "content": [
-                                {"type": "text", "text": "请识别这张图片中的数学题目内容，只输出题目文字。"},
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                            ]}
+                            {"role": "user", "content": ocr_content}
                         ], "max_tokens": 1000, "temperature": 0}
                         req = urllib.request.Request(API_BASE + "/chat/completions",
                             data=json.dumps(ocr_data).encode("utf-8"),
