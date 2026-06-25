@@ -989,57 +989,6 @@ def _extract_content(msg):
         return c
     return msg.get("reasoning_content") or ""
 
-# ── 思考等待幽默提示语 ──
-_THINKING_JOKES = [
-    "正在翻阅你的知识库...",
-    "AI 正在列竖式计算...",
-    "大脑 CPU 占用 99%...",
-    "正在推导中，公式有点多...",
-    "马上就好，先深呼吸...",
-    "正在和服务器斗智斗勇...",
-    "少女祈祷中...",
-    "正在调用万亿参数...",
-    "这道题 AI 也要想一想...",
-    "正在搜索最优解...",
-    "运算中，比你做题快一点...",
-    "知识储备已加载，正在输出...",
-    "正在认真审题...",
-    "思考中，比考研数学简单...",
-    "正在组织最准确的语言...",
-]
-
-def _show_thinking_animation(placeholder, delay=5):
-    """在 placeholder 中注入 JS 动画轮换幽默提示语，delay 秒后返回。"""
-    import time as _time
-    import json as _json
-    msgs_js = _json.dumps(_THINKING_JOKES, ensure_ascii=False)
-    placeholder.markdown(f"""
-    <div id="thinking-box" style="text-align:center;padding:18px 0;">
-      <div id="thinking-spinner" style="display:inline-block;width:18px;height:18px;border:2.5px solid #e2e8f0;border-top-color:var(--primary,#4f46e5);border-radius:50%;animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle;"></div>
-      <span id="thinking-text" style="font-size:.88rem;color:var(--text-sub,#64748b);font-weight:500;transition:opacity .3s;"></span>
-    </div>
-    <style>@keyframes spin{{to{{transform:rotate(360deg)}}}}</style>
-    <script>
-    (function(){{
-      var msgs={msgs_js};
-      var el=document.getElementById('thinking-text');
-      var idx=0;
-      function show(){{
-        el.style.opacity=0;
-        setTimeout(function(){{
-          el.textContent=msgs[idx%msgs.length];
-          el.style.opacity=1;
-          idx++;
-        }},300);
-      }}
-      show();
-      var timer=setInterval(show,1800);
-      setTimeout(function(){{clearInterval(timer)}},{delay*1000+500});
-    }})();
-    </script>
-    """, unsafe_allow_html=True)
-    _time.sleep(delay)
-
 def _typing_display(placeholder, text, delay=0.02):
     """打字效果显示文本，LaTeX 公式整体插入不拆散"""
     import time as _time
