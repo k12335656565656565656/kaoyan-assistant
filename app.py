@@ -4349,7 +4349,7 @@ if st.session_state.page == "main":
                 '<div style="display:inline-block;width:16px;height:16px;border:2px solid #475569;'
                 'border-top-color:#818cf8;border-radius:50%;'
                 'animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle;"></div>'
-                '<span style="font-size:.85rem;color:#94a3b8;">AI 正在思考...</span>'
+                '<span style="font-size:.92rem;color:#818cf8;font-weight:700;">深度思考中，请耐心等待</span>'
                 '</div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>',
                 unsafe_allow_html=True
             )
@@ -4368,14 +4368,18 @@ if st.session_state.page == "main":
                     _stream_count += 1
                     # 每 5 个 token 或每 0.3 秒刷新一次页面
                     if _stream_count % 5 == 0 or (_stime.time() - _last_flush) > 0.3:
-                        stream_placeholder.markdown(_stream_buf)
+                        stream_placeholder.markdown(
+                            _escape_md(_collapse_math(_fix_latex(_stream_buf)))
+                        )
                         _last_flush = _stime.time()
                 elif event["type"] == "done":
                     output = event["result"]
 
             # 最终刷新：确保所有内容都显示
             if _stream_buf:
-                stream_placeholder.markdown(_stream_buf)
+                stream_placeholder.markdown(
+                    _escape_md(_collapse_math(_fix_latex(_stream_buf)))
+                )
 
             answer_text = ""
             if output and output.get("answer"):
@@ -6405,7 +6409,7 @@ with mid_col:
             '<div style="display:inline-block;width:16px;height:16px;border:2px solid #475569;'
             'border-top-color:#818cf8;border-radius:50%;'
             'animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle;"></div>'
-            '<span style="font-size:.85rem;color:#94a3b8;">AI 正在思考...</span>'
+            '<span style="font-size:.92rem;color:#818cf8;font-weight:700;">深度思考中，请耐心等待</span>'
             '</div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>',
             unsafe_allow_html=True
         )
@@ -6429,7 +6433,9 @@ with mid_col:
                 output = event["result"]
 
         if _stream_buf:
-            stream_placeholder.markdown(_stream_buf)
+            stream_placeholder.markdown(
+                _escape_md(_collapse_math(_fix_latex(_stream_buf)))
+            )
 
         # 流结束后，处理 [ANSWER] 部分
         answer_text = ""
