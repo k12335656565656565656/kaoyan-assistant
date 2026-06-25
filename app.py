@@ -4393,29 +4393,40 @@ if st.session_state.page == "main":
             st.markdown('<div class="qa-card">', unsafe_allow_html=True)
             st.markdown("### 回答")
 
-            @st.fragment(run_every=1)
-            def _think_animation():
-                import random as _rnd
-                msg = _rnd.choice(_THINKING_JOKES)
-                st.markdown(
-                    f'<div style="text-align:center;padding:18px 0;">'
-                    f'<div style="display:inline-block;width:18px;height:18px;border:2.5px solid #475569;'
-                    f'border-top-color:#818cf8;border-radius:50%;'
-                    f'animation:spin .7s linear infinite;margin-right:10px;vertical-align:middle;"></div>'
-                    f'<span style="font-size:.88rem;color:#94a3b8;font-weight:500;">{msg}</span>'
-                    f'</div>'
-                    f'<style>@keyframes spin{{to{{transform:rotate(360deg)}}</style>',
-                    unsafe_allow_html=True
-                )
-            _think_animation()
+            # 流式渲染：逐 token 实时显示
+            stream_placeholder = st.empty()
+            stream_placeholder.markdown(
+                '<div style="text-align:center;padding:14px 0;">'
+                '<div style="display:inline-block;width:16px;height:16px;border:2px solid #475569;'
+                'border-top-color:#818cf8;border-radius:50%;'
+                'animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle;"></div>'
+                '<span style="font-size:.85rem;color:#94a3b8;">AI 正在思考...</span>'
+                '</div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>',
+                unsafe_allow_html=True
+            )
 
             raw_full = ""
             output = None
+            _stream_buf = ""
+            _stream_count = 0
+            import time as _stime
+            _last_flush = _stime.time()
+
             for event in run_pipeline(user_input, docs, "mimo-v2.5"):
                 if event["type"] == "token":
                     raw_full += event["content"]
+                    _stream_buf += event["content"]
+                    _stream_count += 1
+                    # 每 5 个 token 或每 0.3 秒刷新一次页面
+                    if _stream_count % 5 == 0 or (_stime.time() - _last_flush) > 0.3:
+                        stream_placeholder.markdown(_stream_buf)
+                        _last_flush = _stime.time()
                 elif event["type"] == "done":
                     output = event["result"]
+
+            # 最终刷新：确保所有内容都显示
+            if _stream_buf:
+                stream_placeholder.markdown(_stream_buf)
 
             answer_text = ""
             if output and output.get("answer"):
@@ -4428,13 +4439,15 @@ if st.session_state.page == "main":
                 else:
                     answer_text = raw_full
 
+            # 最终渲染：处理 LaTeX 和 Markdown
             if answer_text.strip():
-                answer_placeholder = st.empty()
-                _typing_display(answer_placeholder, _escape_md(_collapse_math(_fix_latex(answer_text.strip()))), delay=0.02)
+                stream_placeholder.markdown(
+                    _escape_md(_collapse_math(_fix_latex(answer_text.strip())))
+                )
                 _katex_refresh()
                 st.session_state._last_answer_text = answer_text.strip()
             else:
-                st.empty().markdown("（AI 回复为空，请重试）")
+                stream_placeholder.markdown("（AI 回复为空，请重试）")
                 st.session_state._last_answer_text = "（AI 回复为空，请重试）"
             st.markdown('</div>', unsafe_allow_html=True)
             add_thinking("回答完成")
@@ -6433,36 +6446,43 @@ with mid_col:
         add_thinking(f"查询: {query[:30]}..." if query else "图片识别...")
         results = search_corpus(query, corpus, top_k=3) if query else []
 
-        # 流式接收（只收集，不立即显示）
+        # 流式渲染：逐 token 实时显示
         st.markdown('<div class="qa-card">', unsafe_allow_html=True)
         st.markdown("### 💡 回答")
 
-        @st.fragment(run_every=1)
-        def _think_animation_2():
-            import random as _rnd
-            msg = _rnd.choice(_THINKING_JOKES)
-            st.markdown(
-                f'<div style="text-align:center;padding:18px 0;">'
-                f'<div style="display:inline-block;width:18px;height:18px;border:2.5px solid #475569;'
-                f'border-top-color:#818cf8;border-radius:50%;'
-                f'animation:spin .7s linear infinite;margin-right:10px;vertical-align:middle;"></div>'
-                f'<span style="font-size:.88rem;color:#94a3b8;font-weight:500;">{msg}</span>'
-                f'</div>'
-                f'<style>@keyframes spin{{to{{transform:rotate(360deg)}}</style>',
-                unsafe_allow_html=True
-            )
-        _think_animation_2()
+        stream_placeholder = st.empty()
+        stream_placeholder.markdown(
+            '<div style="text-align:center;padding:14px 0;">'
+            '<div style="display:inline-block;width:16px;height:16px;border:2px solid #475569;'
+            'border-top-color:#818cf8;border-radius:50%;'
+            'animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle;"></div>'
+            '<span style="font-size:.85rem;color:#94a3b8;">AI 正在思考...</span>'
+            '</div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>',
+            unsafe_allow_html=True
+        )
 
         raw_full = ""
         output = None
+        _stream_buf = ""
+        _stream_count = 0
+        import time as _stime
+        _last_flush = _stime.time()
 
         for event in run_pipeline(query or "请识别并解答图中的数学题目", results, st.session_state.selected_model, img_data):
             if event["type"] == "token":
                 raw_full += event["content"]
+                _stream_buf += event["content"]
+                _stream_count += 1
+                if _stream_count % 5 == 0 or (_stime.time() - _last_flush) > 0.3:
+                    stream_placeholder.markdown(_stream_buf)
+                    _last_flush = _stime.time()
             elif event["type"] == "done":
                 output = event["result"]
 
-        # 流结束后，打字效果显示 [ANSWER] 部分
+        if _stream_buf:
+            stream_placeholder.markdown(_stream_buf)
+
+        # 流结束后，处理 [ANSWER] 部分
         answer_text = ""
         if output and output.get("answer"):
             answer_text = output["answer"]
@@ -6476,10 +6496,10 @@ with mid_col:
                 answer_text = raw_full
 
         if answer_text.strip():
-            answer_placeholder = st.empty()
-            _typing_display(answer_placeholder, _escape_md(_collapse_math(_fix_latex(answer_text.strip()))), delay=0.02)
+            stream_placeholder.markdown(
+                _escape_md(_collapse_math(_fix_latex(answer_text.strip())))
+            )
             _katex_refresh()
-            # 保存 answer_text，供 rerun 时重新渲染（如切标签页后 WebSocket 断连）
             st.session_state._last_answer_text = answer_text.strip()
         st.markdown('</div>', unsafe_allow_html=True)
         # 诊断：GLM 原始输出
