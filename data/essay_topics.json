@@ -1,0 +1,86 @@
+{
+  "英语一": {
+    "2016": {
+      "partA_image": "data/英语真题图片/2016_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2016_英语一_大作文.png"
+    },
+    "2017": {
+      "partA_image": "data/英语真题图片/2017_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2017_英语一_大作文.png"
+    },
+    "2018": {
+      "partA_image": "data/英语真题图片/2018_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2018_英语一_大作文.png"
+    },
+    "2019": {
+      "partA_image": "data/英语真题图片/2019_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2019_英语一_大作文.png"
+    },
+    "2020": {
+      "partA_image": "data/英语真题图片/2020_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2020_英语一_大作文.png"
+    },
+    "2021": {
+      "partA_image": "data/英语真题图片/2021_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2021_英语一_大作文.png"
+    },
+    "2022": {
+      "partA_image": "data/英语真题图片/2022_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2022_英语一_大作文.png"
+    },
+    "2023": {
+      "partA_image": "data/英语真题图片/2023_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2023_英语一_大作文.png"
+    },
+    "2024": {
+      "partA_image": "data/英语真题图片/2024_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2024_英语一_大作文.png"
+    },
+    "2025": {
+      "partA_image": "data/英语真题图片/2025_英语一_应用文.png",
+      "partB_image": "data/英语真题图片/2025_英语一_大作文.png"
+    }
+  },
+  "英语二": {
+    "2016": {
+      "partA_image": "data/英语真题图片/2016_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2016_英语二_大作文.png"
+    },
+    "2017": {
+      "partA_image": "data/英语真题图片/2017_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2017_英语二_大作文.png"
+    },
+    "2018": {
+      "partA_image": "data/英语真题图片/2018_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2018_英语二_大作文.png"
+    },
+    "2019": {
+      "partA_image": "data/英语真题图片/2019_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2019_英语二_大作文.png"
+    },
+    "2020": {
+      "partA_image": "data/英语真题图片/2020_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2020_英语二_大作文.png"
+    },
+    "2021": {
+      "partA_image": "data/英语真题图片/2021_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2021_英语二_大作文.png"
+    },
+    "2022": {
+      "partA_image": "data/英语真题图片/2022_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2022_英语二_大作文.png"
+    },
+    "2023": {
+      "partA_image": "data/英语真题图片/2023_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2023_英语二_大作文.png"
+    },
+    "2024": {
+      "partA_image": "data/英语真题图片/2024_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2024_英语二_大作文.png"
+    },
+    "2025": {
+      "partA_image": "data/英语真题图片/2025_英语二_应用文.png",
+      "partB_image": "data/英语真题图片/2025_英语二_大作文.png"
+    }
+  }
+}

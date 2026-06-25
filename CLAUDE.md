@@ -136,26 +136,53 @@ nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --server.
 
 ## 最近改动
 
-- **2026-06-15 UI 全面重设计**:
-  - CSS 切换到 Indigo 主题 (#4f46e5/#6366f1)，Design Tokens 体系
-  - Hub 改为 Dashboard 布局：Hero 渐隐标题 + Flow 心流指标 + 4 SVG feature cards + 2 wide cards
-  - 卡片全部 Feather 风格 SVG 图标（四宫格/柱状图/书本/聊天气泡/文档/对勾）
-  - 卡片 `<a href="?p=xxx">` query param 路由，整卡任意位置可点
-  - 侧边栏全局常驻：毛玻璃背景、2 分组标签、Emoji + st.button 导航、流光边框、弹性按钮
-  - 侧边栏用户卡片升级：头像渐变流光 + 打卡天数统计
-  - 6 层呼吸过渡动画系统（breatheIn / cardReveal / sidebarSlideIn / bannerReveal / qaRise / navItemFade）
-  - 页面切换模糊→清晰过渡 + 卡片错开浮现
-- 学习计划 prompt 去「老师」化（朴素理性风格）
-- MiMo API 全量切换（`_extract_content()` 全局修复）
-- pack.py 添加 recommend.py，.gitignore 更新
-- 新建 `启动.bat` / `管理进程.bat`（纯 ASCII，端口轮询，自动开浏览器）
-- Memory 记忆系统配置 + CLAUDE.md 当前任务章节
+- **2026-06-19 出题按钮增加 AI 思考状态提示**:
+  - 数学问答知识库出题按钮点击后，原位显示灰蓝色旋转提示"AI 正在出题思考中..."
+  - 经历 4 次迭代：st.spinner（页面顶部不可见）→ st.info（太重）→ st.progress（太蓝）→ 自定义 HTML spinner（#94a3b8）
+  - 仅改数学问答知识库 Tab 一处（4374行），独立知识库页两处保持 st.progress
+
+- **2026-06-19 同步橘色原版缺失的 Skills**:
+  - 从 `kaoyan-assistant-橘色原版` 复制了 3 个缺失的 skill 到新版 `skills/`:
+    - `latex-formatter` (LaTeX规范) — **关键修复**：新版代码引用此 skill 但文件缺失，导致资料生成 prompt 中 LaTeX 规则从 76 行完整规范降级为 4 行兜底
+    - `feynman-concept` (费曼概念) 和 `feynman-problem` (费曼解题) — 保持两版 skill 目录一致（当前两版均用内联 prompt，skill 文件备用）
+  - 新版 skills 从 6 个恢复到 9 个，与橘色原版对齐
+
+- **2026-06-19 费曼评价清洗误伤修复**:
+  - `_clean_mimo_output()` 行级过滤误删评价中的改进建议（如"首先，你需要..."、"这道题的核心是..."、"根据定理..."）
+  - 修复：检测到评价格式标记（`[总分]`/`[概念理解]`/`[解题正确性]`等）时跳过行级过滤
+  - 同时将评价格式标记加入 `_answer_markers`，确保 AI 思考前缀被截断但评价内容完整保留
+
+- **2026-06-22 CSS 断裂修复 — 数学问答 upload 重叠**:
+  - **根因**: `.feature-card .card-title` 规则缺少闭合 `}`（第 467 行后），导致 CSS 解析器在 ~9700 字符处断裂
+  - **影响范围**: 该规则之后所有 CSS 全部被丢弃（92/484 条规则被解析），包括 `stFileUploader` icon 隐藏规则、按钮样式、radio 样式等
+  - **具体表现**: 数学问答 upload 按钮的 icon 文字 "upload" 和 label "Upload" 视觉重叠（`stIconMaterial` 的 `display: flex` 未被覆盖为 `font-size: 0`）
+  - **修复**: 第 468 行补上 `}`
+
+- **2026-06-20 资料生成文档修复**:
+  - `_ai_output_to_docx_via_pandoc` 回退橘色原版：纯 pandoc + MathML，删掉三级 fallback 和粗体 strip
+  - 模板字体宋体→等线，解决 Word 中文渲染偏黑（WPS/手机端无此问题）
+  - 按钮 `🚀 生成资料` → `生成资料`（去 emoji）
+  - 本地安装 Pandoc 3.6.4 (`C:\Users\zy\pandoc\pandoc-3.6.4\`)
+  - 英语专家模块对照确认无缺失（仅 emoji 差异）
+  - Pandoc 依赖 PATH，启动 Streamlit 需确保 pandoc 在 PATH 中
+
+- **2026-06-18~19 对照橘色原版全面修复** (commit a2a9e34):
+  - **复习窗口**: HTML 固定卡片 → `st.expander` 折叠 + `get_review_candidates()` 遗忘曲线 + `update_memory()` 写 DB + demo 假数据移除
+  - **智能问答核心**: `call_llm_api` 阻塞 → `run_pipeline` 流式 SSE + `_typing_display` 打字效果 + `[ANSWER]/[KNOWLEDGE]` 结构化解析
+  - **Q&A 交互按钮**: 回答下方增加「掌握了」「加入复习库」「生成复习题」三个按钮 + 知识点自动归纳入库
+  - **费曼学习法**: 评分 prompt 切换为结构化 `CONCEPT_EVAL_PROMPT`/`PROBLEM_EVAL_PROMPT` + 正则提取分数 + `save_feynman_record` 持久化 + 历史记录展示 + 图片 OCR 上传
+  - **出题/概念自测**: 知识库卡片按钮 → `session_state` 闭环（出题→生成题目卡→答题→AI评分→保存）；概念自测参考旧版直接用知识点名
+  - 新增 `_record_qa_knowledge()` 函数：问答后自动入库知识点
+  - Expander CSS 修复：去掉 `span:first-child` 的 `font-size:0` 
+  - 全局 emoji 清理（出题/复习/费曼等标签和按钮）
+  - 橘色原版路径: `C:\Users\zy\kaoyan-assistant-橘色原版\app.py`
 
 ## 当前任务
 
 > **每次会话结束时更新此章节，下次新会话自动加载。**
 
 - **进行中**: 无
-- **待办**: 老板 review PR #6 后可能的反馈修改
-- **上次会话**: 2026-06-17~18 — 概念自测+出题 MiMo 思维链清洗重构、自纠重试、KaTeX 渲染、PR #6 已提交
-- **下次启动提示**: "继续之前的工作"
+- **待办**: 老板 review PR #7；错题库功能找回；备考看板图标等高问题
+- **上次会话**: 2026-06-20 — 资料生成文档修复完成：回退 pandoc 函数、模板换等线、本地装 pandoc、去 emoji
+- **下次启动提示**: "资料生成已修复，模板字体为等线。Pandoc 3.6.4 已安装在 C:\Users\zy\pandoc\pandoc-3.6.4\，启动 Streamlit 前确保 PATH 包含该目录。待办：错题库、看板图标。"
+- **备份**: `C:\Users\zy\kaoyan-assistant-照搬版本`
