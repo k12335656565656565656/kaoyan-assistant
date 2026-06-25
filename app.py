@@ -719,6 +719,205 @@ st.markdown("""
         div[data-testid="stMetricValue"] { font-size: 0.9rem !important; }
         div[data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
     }
+
+    /* ═══════════════════════════════════════════════════════════════
+       Dark Mode — MUST be last in <style> so it wins cascade order
+       ═══════════════════════════════════════════════════════════════ */
+    @media (prefers-color-scheme: dark) {
+        /* ── Design Tokens ── */
+        :root {
+            --primary: #818cf8;
+            --primary-hover: #6366f1;
+            --primary-soft: rgba(129,140,248,0.15);
+            --text-main: #e2e8f0;
+            --text-sub: #94a3b8;
+            --text-muted: #64748b;
+            --border: #334155;
+            --bg-base: #0f172a;
+            --bg-surface: #1e293b;
+            --bg-elevated: #1e293b;
+            --success-soft: rgba(16,185,129,0.15);
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+            --shadow-md: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2);
+            --shadow-lg: 0 2px 6px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.2);
+        }
+
+        /* ── App shell ── */
+        section.main, div[data-testid="stAppViewContainer"], .stApp {
+            background-color: #0f172a !important;
+        }
+
+        /* ── Headings & text ── */
+        h1, h2, h3, h4, h5, h6 { color: #e2e8f0 !important; }
+        p, li, label, span, div { color: #e2e8f0; }
+        .st-caption, small, .small-text { color: #94a3b8 !important; }
+
+        /* ── Sidebar ── */
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, rgba(15,23,42,0.97) 0%, rgba(30,41,59,0.95) 100%) !important;
+            border-right: 1px solid #334155 !important;
+        }
+        section[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+        section[data-testid="stSidebar"] [data-testid="stMarkdown"] p { color: #e2e8f0 !important; }
+        section[data-testid="stSidebar"] button {
+            background: transparent !important; color: #94a3b8 !important;
+            border: 1px solid #334155 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stButton"] button {
+            background: rgba(30,41,59,0.6) !important; color: #94a3b8 !important;
+            border: 1px solid #334155 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stButton"] button:hover {
+            color: #e2e8f0 !important; border-color: #6366f1 !important;
+            background: rgba(79,70,229,0.15) !important;
+        }
+        .sidebar-user {
+            background: linear-gradient(135deg, rgba(30,41,59,0.8) 0%, rgba(15,23,42,0.6) 100%) !important;
+            border-color: #334155 !important;
+        }
+        .sidebar-username { color: #e2e8f0 !important; }
+        .sidebar-subtitle { color: #94a3b8 !important; }
+        .sidebar-section-label { color: #64748b !important; }
+        .sidebar-divider { background: linear-gradient(90deg, transparent, #334155 20%, #334155 80%, transparent) !important; }
+        .sidebar-stat strong { color: #818cf8 !important; }
+        .st-key-sidebar_logout button { border-color: #334155 !important; color: #94a3b8 !important; }
+        .st-key-sidebar_logout button:hover { color: #ef4444 !important; border-color: #7f1d1d !important; background: rgba(239,68,68,0.1) !important; }
+
+        /* ── Nav items ── */
+        .nav-item { color: #94a3b8 !important; background: transparent !important; }
+        .nav-item:hover { background: rgba(79,70,229,0.1) !important; color: #e2e8f0 !important; }
+        .nav-item-active {
+            background: linear-gradient(135deg, rgba(79,70,229,0.15) 0%, rgba(129,140,248,0.12) 100%) !important;
+            color: #818cf8 !important;
+        }
+        .nav-item-active .nav-dot { background: #818cf8 !important; box-shadow: 0 0 8px rgba(129,140,248,0.5) !important; }
+        .st-key-nav_hub button, .st-key-nav_main button, .st-key-nav_english button,
+        .st-key-nav_checkin button, .st-key-nav_popularity button,
+        .st-key-nav_material button, .st-key-nav_suggest button {
+            color: #94a3b8 !important; background: transparent !important;
+        }
+        .st-key-nav_hub button:hover, .st-key-nav_main button:hover,
+        .st-key-nav_english button:hover, .st-key-nav_checkin button:hover,
+        .st-key-nav_popularity button:hover, .st-key-nav_material button:hover,
+        .st-key-nav_suggest button:hover {
+            background: rgba(79,70,229,0.1) !important; color: #e2e8f0 !important;
+        }
+
+        /* ── Cards & containers ── */
+        .qa-card, .memory-card { background: #1e293b !important; border-color: #334155 !important; }
+        .feature-card {
+            background: linear-gradient(135deg, rgba(30,41,59,0.9) 0%, rgba(15,23,42,0.85) 100%) !important;
+            border-color: #334155 !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2), 0 8px 24px rgba(0,0,0,0.15) !important;
+        }
+        .feature-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3), 0 12px 32px rgba(99,102,241,0.15) !important;
+            border-color: rgba(129,140,248,0.3) !important;
+        }
+        .feature-card .card-title { color: #e2e8f0 !important; }
+        .feature-card .card-desc { color: #94a3b8 !important; }
+        .feature-card .card-tag { background: rgba(99,102,241,0.15) !important; color: #818cf8 !important; }
+        .feature-card::before { background: radial-gradient(circle, rgba(129,140,248,0.06) 0%, transparent 70%) !important; }
+        .learning-card {
+            background: rgba(194,65,12,0.12) !important; border-left-color: #f97316 !important;
+        }
+        .mastered-card {
+            background: rgba(34,197,94,0.12) !important; border-left-color: #22c55e !important;
+        }
+        .ref-tag {
+            background: rgba(99,102,241,0.15) !important; color: #818cf8 !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            background: #1e293b !important; border-color: #334155 !important;
+        }
+        div[data-testid="stExpander"] { background: #1e293b !important; }
+        .streamlit-expanderHeader { color: #e2e8f0 !important; }
+
+        /* ── Buttons ── */
+        button[kind="secondary"], button[kind="secondary"]:hover {
+            background: #334155 !important; color: #e2e8f0 !important; border-color: #475569 !important;
+        }
+
+        /* ── Tabs ── */
+        div[data-testid="stTabs"] button[aria-selected="true"] {
+            color: #818cf8 !important; background: rgba(129,140,248,0.12) !important;
+        }
+        div[data-testid="stTabs"] button { color: #94a3b8 !important; }
+        div[data-testid="stTabs"] button:hover { color: #e2e8f0 !important; }
+
+        /* ── Radio pills ── */
+        div[data-testid="stRadio"] label {
+            border-color: #475569 !important; color: #e2e8f0 !important;
+        }
+
+        /* ── Inputs ── */
+        div[data-testid="stTextInput"] input,
+        div[data-testid="stTextArea"] textarea,
+        div[data-testid="stSelectbox"] input,
+        div[data-testid="stMultiSelect"] input {
+            background: #1e293b !important; color: #e2e8f0 !important; border-color: #475569 !important;
+        }
+
+        /* ── Info/warning/success/error boxes ── */
+        div[data-testid="stAlert"] { background: #1e293b !important; color: #e2e8f0 !important; }
+        div[data-testid="stAlert"] p, div[data-testid="stAlert"] span,
+        div[data-testid="stAlert"] li { color: #e2e8f0 !important; }
+
+        /* ── Code blocks ── */
+        div[data-testid="stCodeBlock"] { background: #0f172a !important; }
+
+        /* ── DataFrame / Table ── */
+        div[data-testid="stDataFrame"] { background: #1e293b !important; }
+        div[data-testid="stTable"] { background: #1e293b !important; }
+
+        /* ── Horizontal rule ── */
+        hr { border-color: #334155 !important; }
+
+        /* ── Markdown rendered tables ── */
+        table { background: #1e293b !important; }
+        table th { background: #0f172a !important; color: #e2e8f0 !important; border-color: #334155 !important; }
+        table td { background: #1e293b !important; color: #e2e8f0 !important; border-color: #334155 !important; }
+        table tr:nth-child(even) td { background: #1a2332 !important; }
+        table tr:hover td { background: #253347 !important; }
+
+        /* ── Forms ── */
+        div[data-testid="stForm"] {
+            background: #1e293b !important; border-color: #334155 !important;
+        }
+
+        /* ── Date/time input ── */
+        div[data-testid="stDateInput"] input,
+        div[data-testid="stTimeInput"] input {
+            background: #1e293b !important; color: #e2e8f0 !important; border-color: #475569 !important;
+        }
+
+        /* ── File uploader ── */
+        div[data-testid="stFileUploader"] {
+            background: #1e293b !important; border-color: #475569 !important;
+        }
+        div[data-testid="stFileUploader"] section { background: #1e293b !important; border-color: #475569 !important; }
+
+        /* ── Progress bar ── */
+        div[data-testid="stProgress"] { background: #334155 !important; }
+
+        /* ── Selectbox dropdown ── */
+        div[data-testid="stSelectbox"] [role="listbox"],
+        div[data-testid="stMultiSelect"] [role="listbox"] {
+            background: #1e293b !important; border-color: #475569 !important;
+        }
+        div[data-testid="stSelectbox"] [role="option"],
+        div[data-testid="stMultiSelect"] [role="option"] {
+            background: #1e293b !important; color: #e2e8f0 !important;
+        }
+        div[data-testid="stSelectbox"] [role="option"]:hover,
+        div[data-testid="stMultiSelect"] [role="option"]:hover {
+            background: #334155 !important;
+        }
+
+        /* ── Tooltip / popover ── */
+        div[data-testid="stTooltip"] { background: #1e293b !important; color: #e2e8f0 !important; }
+        div[data-testid="stPopover"] { background: #1e293b !important; border-color: #334155 !important; }
+    }
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 """, unsafe_allow_html=True)
@@ -744,11 +943,9 @@ st.components.v1.html("""
 
 # ==================== 持久化登录（CookieManager 方案） ====================
 
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+# 注意：CookieManager 不能用 @st.cache_resource 缓存，否则所有用户 session 共享同一个实例，
+# 会导致 cookie 串号（A 用户的 token 被 B 用户读到）。
+cookie_manager = stx.CookieManager()
 
 def generate_login_token():
     """生成 64 字符随机 token"""
@@ -791,6 +988,57 @@ def _extract_content(msg):
     if c is not None and c != "":
         return c
     return msg.get("reasoning_content") or ""
+
+# ── 思考等待幽默提示语 ──
+_THINKING_JOKES = [
+    "正在翻阅你的知识库...",
+    "AI 正在列竖式计算...",
+    "大脑 CPU 占用 99%...",
+    "正在推导中，公式有点多...",
+    "马上就好，先深呼吸...",
+    "正在和服务器斗智斗勇...",
+    "少女祈祷中...",
+    "正在调用万亿参数...",
+    "这道题 AI 也要想一想...",
+    "正在搜索最优解...",
+    "运算中，比你做题快一点...",
+    "知识储备已加载，正在输出...",
+    "正在认真审题...",
+    "思考中，比考研数学简单...",
+    "正在组织最准确的语言...",
+]
+
+def _show_thinking_animation(placeholder, delay=5):
+    """在 placeholder 中注入 JS 动画轮换幽默提示语，delay 秒后返回。"""
+    import time as _time
+    import json as _json
+    msgs_js = _json.dumps(_THINKING_JOKES, ensure_ascii=False)
+    placeholder.markdown(f"""
+    <div id="thinking-box" style="text-align:center;padding:18px 0;">
+      <div id="thinking-spinner" style="display:inline-block;width:18px;height:18px;border:2.5px solid #e2e8f0;border-top-color:var(--primary,#4f46e5);border-radius:50%;animation:spin .7s linear infinite;margin-right:8px;vertical-align:middle;"></div>
+      <span id="thinking-text" style="font-size:.88rem;color:var(--text-sub,#64748b);font-weight:500;transition:opacity .3s;"></span>
+    </div>
+    <style>@keyframes spin{{to{{transform:rotate(360deg)}}}}</style>
+    <script>
+    (function(){{
+      var msgs={msgs_js};
+      var el=document.getElementById('thinking-text');
+      var idx=0;
+      function show(){{
+        el.style.opacity=0;
+        setTimeout(function(){{
+          el.textContent=msgs[idx%msgs.length];
+          el.style.opacity=1;
+          idx++;
+        }},300);
+      }}
+      show();
+      var timer=setInterval(show,1800);
+      setTimeout(function(){{clearInterval(timer)}},{delay*1000+500});
+    }})();
+    </script>
+    """, unsafe_allow_html=True)
+    _time.sleep(delay)
 
 def _typing_display(placeholder, text, delay=0.02):
     """打字效果显示文本，LaTeX 公式整体插入不拆散"""
@@ -1003,8 +1251,13 @@ def init_memory_db():
 
     c.execute("""CREATE TABLE IF NOT EXISTS suggestions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT, content TEXT,
+        username TEXT, content TEXT, images TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    # 兼容旧库：给 suggestions 表补 images 列
+    try:
+        c.execute("SELECT images FROM suggestions LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE suggestions ADD COLUMN images TEXT")
 
     # 打卡督学模块 - 每日打卡记录
     c.execute("""CREATE TABLE IF NOT EXISTS checkin_daily (
@@ -2873,7 +3126,7 @@ def render_qa_cards(raw_text, columns=2, typing=False):
         if re.search(r'\\[a-zA-Z]', question) and not re.search(r'[\$\\[]', question):
             question = re.sub(r'(\\[a-zA-Z]+(?:\{[^}]*\})*(?:_\{[^}]*\})*(?:\^\{[^}]*\})*|\w+\^\{?\d+\}?|\\,?[a-z]+|\w+\'\(\d+\))', r'$\1$', question)
 
-        st.markdown(f"<div style='background:#fff;border-radius:16px;padding:clamp(14px,3vw,40px);box-shadow:0 1px 3px rgba(0,0,0,0.04);margin-bottom:24px;font-size:16px;overflow-x:auto;'>", unsafe_allow_html=True)
+        st.markdown(f"<div style='background:var(--bg-surface,#fff);border-radius:16px;padding:clamp(14px,3vw,40px);box-shadow:0 1px 3px rgba(0,0,0,0.04);margin-bottom:24px;font-size:16px;overflow-x:auto;'>", unsafe_allow_html=True)
         st.caption(f"第{qi+1}题")
 
         if typing:
@@ -3212,17 +3465,33 @@ def _generate_material(prompt):
         raise RuntimeError(f"AI 调用失败: {e}")
 
 
+def _find_pandoc():
+    """查找 pandoc 可执行文件路径"""
+    import shutil
+    path = shutil.which("pandoc")
+    if path:
+        return path
+    # Windows 常见安装路径
+    import glob
+    candidates = glob.glob(os.path.join(os.path.expanduser("~"), "AppData", "Local", "Pandoc", "pandoc.exe"))
+    candidates += glob.glob(os.path.join(os.environ.get("ProgramFiles", ""), "Pandoc", "pandoc.exe"))
+    return next((c for c in candidates if os.path.isfile(c)), None)
+
+
 def _ai_output_to_docx_via_pandoc(markdown_text):
     """用 Pandoc 将 Markdown+LaTeX 转为 DOCX（LaTeX 完美渲染）"""
     import tempfile
     import subprocess
+    pandoc = _find_pandoc()
+    if not pandoc:
+        raise FileNotFoundError("pandoc 未安装，请安装 pandoc 后重试：https://pandoc.org/installing.html")
     template = str(Path(__file__).parent / "data" / "reference" / "template.docx")
     with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w", encoding="utf-8") as md:
         md.write(markdown_text)
         md_path = md.name
     docx_path = md_path.replace(".md", ".docx")
     try:
-        cmd = ["pandoc", md_path, "-o", docx_path, "--mathml", "--from", "markdown", "--to", "docx"]
+        cmd = [pandoc, md_path, "-o", docx_path, "--mathml", "--from", "markdown", "--to", "docx"]
         if os.path.exists(template):
             cmd += ["--reference-doc", template]
         subprocess.run(cmd, check=True, capture_output=True)
@@ -3992,15 +4261,15 @@ if st.session_state.page == "main":
             <div style="display:flex;align-items:center;gap:10px;">
                 <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#4f46e5,#a855f7);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.9rem;">{st.session_state.get('username','?')[0]}</div>
                 <div>
-                    <div style="font-weight:700;font-size:0.85rem;color:#1e293b;">{st.session_state.get('username','?')}</div>
-                    <div style="font-size:0.7rem;color:#64748b;">2026 届硕士</div>
+                    <div style="font-weight:700;font-size:0.85rem;color:var(--text-main,#1e293b);">{st.session_state.get('username','?')}</div>
+                    <div style="font-size:0.7rem;color:var(--text-sub,#64748b);">2026 届硕士</div>
                 </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
         # QA Style Selector
-        st.markdown('<p style="font-size:0.78rem;font-weight:700;color:#1e293b;margin:10px 0 6px 0;">回答模式选择</p>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:0.78rem;font-weight:700;color:var(--text-main,#1e293b);margin:10px 0 6px 0;">回答模式选择</p>', unsafe_allow_html=True)
         _styles = ["默认", "分步解题", "概念讲解", "错题分析", "纯要点", "一问一答", "纯公式"]
         _style = st.session_state.get("qa_style", "默认")
         for s in _styles:
@@ -4012,7 +4281,7 @@ if st.session_state.page == "main":
     with main:
         # Guide — 蓝色渐变卡片
         st.markdown("""
-        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border:1px solid #bae6fd;border-radius:12px;padding:18px 20px;margin-bottom:16px;">
+        <div style="background:var(--bg-elevated,#e0f2fe);border:1px solid var(--border,#bae6fd);border-radius:12px;padding:18px 20px;margin-bottom:16px;">
             <div style="font-size:0.92rem;font-weight:700;color:#0369a1;margin-bottom:10px;">从这里开始</div>
             <div style="font-size:0.84rem;color:#1e40af;line-height:1.8;">
                 <p style="margin-bottom:8px;">这里收录了 <strong>110 个考研数学核心知识点</strong>，从高数到线代再到概率论，按 2025 年最新发布的考研数学大纲整理好了。问什么，它就去知识库里翻最相关的内容，再让 AI 组织成你能看懂的答案。</p>
@@ -4123,8 +4392,22 @@ if st.session_state.page == "main":
 
             st.markdown('<div class="qa-card">', unsafe_allow_html=True)
             st.markdown("### 回答")
-            thinking_placeholder = st.empty()
-            thinking_placeholder.markdown("AI 正在思考...")
+
+            @st.fragment(run_every=1)
+            def _think_animation():
+                import random as _rnd
+                msg = _rnd.choice(_THINKING_JOKES)
+                st.markdown(
+                    f'<div style="text-align:center;padding:18px 0;">'
+                    f'<div style="display:inline-block;width:18px;height:18px;border:2.5px solid #475569;'
+                    f'border-top-color:#818cf8;border-radius:50%;'
+                    f'animation:spin .7s linear infinite;margin-right:10px;vertical-align:middle;"></div>'
+                    f'<span style="font-size:.88rem;color:#94a3b8;font-weight:500;">{msg}</span>'
+                    f'</div>'
+                    f'<style>@keyframes spin{{to{{transform:rotate(360deg)}}</style>',
+                    unsafe_allow_html=True
+                )
+            _think_animation()
 
             raw_full = ""
             output = None
@@ -4134,7 +4417,6 @@ if st.session_state.page == "main":
                 elif event["type"] == "done":
                     output = event["result"]
 
-            thinking_placeholder.empty()
             answer_text = ""
             if output and output.get("answer"):
                 answer_text = output["answer"]
@@ -4152,7 +4434,7 @@ if st.session_state.page == "main":
                 _katex_refresh()
                 st.session_state._last_answer_text = answer_text.strip()
             else:
-                thinking_placeholder.markdown("（AI 回复为空，请重试）")
+                st.empty().markdown("（AI 回复为空，请重试）")
                 st.session_state._last_answer_text = "（AI 回复为空，请重试）"
             st.markdown('</div>', unsafe_allow_html=True)
             add_thinking("回答完成")
@@ -4259,8 +4541,8 @@ if st.session_state.page == "main":
 
             # 简洁标题
             st.markdown(f"""
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 0;border-bottom:1px solid #e2e8f0;">
-                <span style="font-size:0.88rem;font-weight:600;color:#1e293b;">共 <span style="color:#4f46e5;">{len(_filtered)}</span> 个知识点</span>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 0;border-bottom:1px solid var(--border,#e2e8f0);">
+                <span style="font-size:0.88rem;font-weight:600;color:var(--text-main,#1e293b);">共 <span style="color:var(--primary,#4f46e5);">{len(_filtered)}</span> 个知识点</span>
             </div>
             """, unsafe_allow_html=True)
 
@@ -4282,7 +4564,7 @@ if st.session_state.page == "main":
 
                 # 卡片：整个横条淡蓝色渐变
                 st.markdown(f"""
-                <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:16px 18px;margin-bottom:10px;cursor:pointer;border:1px solid #bae6fd;">
+                <div style="background:var(--bg-elevated,#e0f2fe);border-radius:12px;padding:16px 18px;margin-bottom:10px;cursor:pointer;border:1px solid #bae6fd;">
                     <div style="font-size:0.92rem;font-weight:600;color:#0369a1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                         {clean_name}
                     </div>
@@ -4298,7 +4580,7 @@ if st.session_state.page == "main":
                 with b2:
                     if st.button("出题", key=f"quiz_{doc_id}", use_container_width=True):
                         _hint = st.empty()
-                        _hint.markdown('<div style="display:flex;align-items:center;gap:8px;padding:6px 0"><div style="width:14px;height:14px;border:2px solid #e2e8f0;border-top-color:#94a3b8;border-radius:50%;animation:sp06 .6s linear infinite"></div><span style="font-size:.78rem;color:#64748b">AI 正在出题思考中...</span></div><style>@keyframes sp06{to{transform:rotate(360deg)}}</style>', unsafe_allow_html=True)
+                        _hint.markdown('<div style="display:flex;align-items:center;gap:8px;padding:6px 0"><div style="width:14px;height:14px;border:2px solid #e2e8f0;border-top-color:var(--text-muted,#94a3b8);border-radius:50%;animation:sp06 .6s linear infinite"></div><span style="font-size:.78rem;color:var(--text-sub,#64748b)">AI 正在出题思考中...</span></div><style>@keyframes sp06{to{transform:rotate(360deg)}}</style>', unsafe_allow_html=True)
                         st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": doc_id}])
                         _hint.empty()
                         st.session_state._kb_qid = doc_id
@@ -4389,14 +4671,14 @@ if st.session_state.page == "main":
                 # 展开的内容区域（更长）
                 if st.session_state.get(f"show_{doc_id}", False):
                     st.markdown(f"""
-                    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;font-size:0.84rem;color:#475569;line-height:1.75;margin-bottom:16px;max-height:450px;overflow-y:auto;">
+                    <div style="background:var(--bg-elevated,#f8fafc);border:1px solid var(--border,#e2e8f0);border-radius:10px;padding:16px;font-size:0.84rem;color:var(--text-sub,#475569);line-height:1.75;margin-bottom:16px;max-height:450px;overflow-y:auto;">
                         {doc_text}
                     </div>
                     """, unsafe_allow_html=True)
 
         with _tabs[1]:
             st.markdown("""
-            <div style="font-size:0.88rem;font-weight:700;color:#1e293b;margin-bottom:12px;">复习挑战</div>
+            <div style="font-size:0.88rem;font-weight:700;color:var(--text-main,#1e293b);margin-bottom:12px;">复习挑战</div>
             """, unsafe_allow_html=True)
 
             corpus = load_corpus()
@@ -4436,8 +4718,8 @@ if st.session_state.page == "main":
 
         with _tabs[2]:
             st.markdown("""
-            <div style="font-size:0.88rem;font-weight:700;color:#1e293b;margin-bottom:12px;">费曼学习法</div>
-            <div style="padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:0.82rem;color:#4f46e5;margin-bottom:14px;">
+            <div style="font-size:0.88rem;font-weight:700;color:var(--text-main,#1e293b);margin-bottom:12px;">费曼学习法</div>
+            <div style="padding:10px 14px;background:var(--primary-soft,#eff6ff);border:1px solid var(--border,#bfdbfe);border-radius:8px;font-size:0.82rem;color:var(--primary,#4f46e5);margin-bottom:14px;">
                 选择模式 -> 输入题目或上传图片 -> 写下你的答案 -> AI 评价
             </div>
             """, unsafe_allow_html=True)
@@ -4451,7 +4733,7 @@ if st.session_state.page == "main":
                     placeholder="例如：什么是洛必达法则？\n或：求函数 f(x)=x^3-3x+2 的极值",
                     key="feynman_topic")
             with col_img:
-                st.markdown('<div style="font-size:0.82rem;font-weight:600;color:#64748b;margin-bottom:4px;">或上传题目图片</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:0.82rem;font-weight:600;color:var(--text-sub,#64748b);margin-bottom:4px;">或上传题目图片</div>', unsafe_allow_html=True)
                 _fimg = st.file_uploader("上传图片", type=["png", "jpg", "jpeg"], key="feynman_img", label_visibility="collapsed")
                 if _fimg is not None:
                     img_b64 = base64.b64encode(_fimg.getvalue()).decode()
@@ -4536,7 +4818,7 @@ if st.session_state.page == "main":
 
         with _tabs[3]:
             st.markdown("""
-            <div style="font-size:0.88rem;font-weight:700;color:#1e293b;margin-bottom:14px;">知识点掌握情况</div>
+            <div style="font-size:0.88rem;font-weight:700;color:var(--text-main,#1e293b);margin-bottom:14px;">知识点掌握情况</div>
             """, unsafe_allow_html=True)
             _all = len(load_corpus())
             uid = st.session_state.get("user_id")
@@ -4576,8 +4858,8 @@ if st.session_state.page == "main":
             _pct = int(_mastered / max(_all, 1) * 100)
             st.markdown(f"""
             <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:6px;">
-                <span style="color:#64748b;">掌握进度</span>
-                <strong style="color:#1e293b;">{_mastered}/{_all} ({_pct}%)</strong>
+                <span style="color:var(--text-sub,#64748b);">掌握进度</span>
+                <strong style="color:var(--text-main,#1e293b);">{_mastered}/{_all} ({_pct}%)</strong>
             </div>
             """, unsafe_allow_html=True)
             st.progress(_pct / 100)
@@ -4586,9 +4868,9 @@ if st.session_state.page == "main":
             if _cards:
                 for item in _cards:
                     status = item["status"]
-                    _bg = "#f0fdf4" if status == "mastered" else "#fff7ed"
+                    _bg = "var(--success-soft,#f0fdf4)" if status == "mastered" else "rgba(249,115,22,0.12)"
                     _border = "#22c55e" if status == "mastered" else "#f97316"
-                    _color = "#166534" if status == "mastered" else "#c2410c"
+                    _color = "var(--text-main,#166534)" if status == "mastered" else "var(--text-sub,#c2410c)"
                     st.markdown(f"""
                     <div style="padding:10px 14px;margin-bottom:4px;border-radius:8px;font-size:0.82rem;font-weight:500;background:{_bg};color:{_color};border-left:3px solid {_border};">
                         {item['name']} · ✓{item['correct']} ✗{item['wrong']}
@@ -4602,16 +4884,16 @@ if st.session_state.page == "main":
                     ("learning", "03. 矩阵的特征值与特征向量", "✓5 ✗6"),
                 ]
                 for status, name, stats in _sample_cards:
-                    _bg = "#f0fdf4" if status == "mastered" else "#fff7ed"
+                    _bg = "var(--success-soft,#f0fdf4)" if status == "mastered" else "rgba(249,115,22,0.12)"
                     _border = "#22c55e" if status == "mastered" else "#f97316"
-                    _color = "#166534" if status == "mastered" else "#c2410c"
+                    _color = "var(--text-main,#166534)" if status == "mastered" else "var(--text-sub,#c2410c)"
                     st.markdown(f"""
                     <div style="padding:10px 14px;margin-bottom:4px;border-radius:8px;font-size:0.82rem;font-weight:500;background:{_bg};color:{_color};border-left:3px solid {_border};">
                         {name} · {stats}
                     </div>
                     """, unsafe_allow_html=True)
                 st.caption("👆 以上为示例数据。开始使用问答后，系统会自动追踪你的掌握情况。")
-            st.markdown('<div style="text-align:center;padding:12px;font-size:0.75rem;color:#94a3b8;">使用问答后系统自动追踪 · 共 110 个知识点</div>', unsafe_allow_html=True)
+            st.markdown('<div style="text-align:center;padding:12px;font-size:0.75rem;color:var(--text-muted,#94a3b8);">使用问答后系统自动追踪 · 共 110 个知识点</div>', unsafe_allow_html=True)
 
     st.stop()
 
@@ -4648,33 +4930,33 @@ if st.session_state.page == "hub":
             progress_pct = flow_data["progress_pct"]
             # 进度颜色：绿(≥80%) / 靛(≥50%) / 琥珀(>0%) / 灰(0%)
             if progress_pct >= 80:
-                bar_color = "#22c55e"; bg_color = "#f0fdf4"
+                bar_color = "#22c55e"; bg_color = "var(--success-soft,#f0fdf4)"
             elif progress_pct >= 50:
-                bar_color = "#4f46e5"; bg_color = "#eef2ff"
+                bar_color = "#4f46e5"; bg_color = "var(--primary-soft,#eef2ff)"
             elif progress_pct > 0:
-                bar_color = "#f59e0b"; bg_color = "#fffbeb"
+                bar_color = "#f59e0b"; bg_color = "rgba(245,158,11,0.12)"
             else:
-                bar_color = "#94a3b8"; bg_color = "#f8fafc"
+                bar_color = "var(--text-muted,#94a3b8)"; bg_color = "var(--bg-elevated,#f8fafc)"
             st.markdown(f"""
             <div class="qa-card" style="text-align:center;">
-                <div style="font-size:0.82rem;font-weight:700;color:#64748b;margin-bottom:6px;">⚡ 今日聚焦心流</div>
+                <div style="font-size:0.82rem;font-weight:700;color:var(--text-sub,#64748b);margin-bottom:6px;">⚡ 今日聚焦心流</div>
                 <div style="font-size:2.2rem;font-weight:800;color:{bar_color};">{focus_hours}
-                    <span style="font-size:0.85rem;color:#64748b;font-weight:400;">小时</span>
+                    <span style="font-size:0.85rem;color:var(--text-sub,#64748b);font-weight:400;">小时</span>
                 </div>
                 <div style="display:inline-flex;align-items:center;gap:6px;font-size:0.75rem;padding:4px 12px;background:{bg_color};color:{bar_color};border-radius:20px;font-weight:500;">
                     <span style="width:6px;height:6px;border-radius:50%;background:{bar_color};"></span> {'已达每日目标 ' + str(progress_pct) + '%' if progress_pct > 0 else '今日尚未开始'}
                 </div>
-                <div style="margin-top:10px;font-size:0.78rem;color:#475569;line-height:1.5;padding:0 4px;">{flow_msg}</div>
+                <div style="margin-top:10px;font-size:0.78rem;color:var(--text-sub,#475569);line-height:1.5;padding:0 4px;">{flow_msg}</div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div class="qa-card" style="text-align:center;">
-                <div style="font-size:0.82rem;font-weight:700;color:#64748b;margin-bottom:6px;">⚡ 今日聚焦心流</div>
-                <div style="font-size:2.2rem;font-weight:800;color:#94a3b8;">—
-                    <span style="font-size:0.85rem;color:#64748b;font-weight:400;">小时</span>
+                <div style="font-size:0.82rem;font-weight:700;color:var(--text-sub,#64748b);margin-bottom:6px;">⚡ 今日聚焦心流</div>
+                <div style="font-size:2.2rem;font-weight:800;color:var(--text-muted,#94a3b8);">—
+                    <span style="font-size:0.85rem;color:var(--text-sub,#64748b);font-weight:400;">小时</span>
                 </div>
-                <div style="display:inline-flex;align-items:center;gap:6px;font-size:0.75rem;padding:4px 12px;background:#f8fafc;color:#94a3b8;border-radius:20px;font-weight:500;">
+                <div style="display:inline-flex;align-items:center;gap:6px;font-size:0.75rem;padding:4px 12px;background:var(--bg-elevated,#f8fafc);color:var(--text-muted,#94a3b8);border-radius:20px;font-weight:500;">
                     登录后开始记录
                 </div>
             </div>
@@ -4874,7 +5156,7 @@ if st.session_state.page == "popularity":
 
         # 卡片1：考试科目
         st.markdown(f"""
-        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
+        <div style="background:var(--bg-elevated,#e0f2fe);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
             <span class="info-badge">科目</span>
             <span style="font-size:0.9rem;font-weight:600;color:#0369a1;">考试科目（{len(subjects)}门）</span>
         </div>
@@ -4893,7 +5175,7 @@ if st.session_state.page == "popularity":
         # 卡片2：平台热度
         plat_ok = sum(1 for p in platforms if p.get("score") is not None)
         st.markdown(f"""
-        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
+        <div style="background:var(--bg-elevated,#e0f2fe);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
             <span class="info-badge">热度</span>
             <span style="font-size:0.9rem;font-weight:600;color:#0369a1;">平台热度详情（{plat_ok}/{len(platforms)}平台有数据）</span>
         </div>
@@ -4927,7 +5209,7 @@ if st.session_state.page == "popularity":
         dept = si.get("department", "") or "暂未收录"
         push = si.get("pushRatioDesc", "")
         st.markdown(f"""
-        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
+        <div style="background:var(--bg-elevated,#e0f2fe);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
             <span class="info-badge">院校</span>
             <span style="font-size:0.9rem;font-weight:600;color:#0369a1;">院校信息</span>
         </div>
@@ -4946,7 +5228,7 @@ if st.session_state.page == "popularity":
 
         # 卡片4：备注
         st.markdown(f"""
-        <div style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
+        <div style="background:var(--bg-elevated,#e0f2fe);border-radius:12px;padding:14px 18px;margin-bottom:4px;border:1px solid #bae6fd;">
             <span class="info-badge">备注</span>
             <span style="font-size:0.9rem;font-weight:600;color:#0369a1;">备注（{len(notes)}条）</span>
         </div>
@@ -5181,17 +5463,41 @@ if st.session_state.page == "suggest":
     </div>
     """, unsafe_allow_html=True)
 
+    st.info("这个网站还在不断打磨中，很多地方都需要改进。不管你是发现了 bug、觉得某个功能不好用，"
+            "还是单纯想提个建议，都欢迎随时告诉我们。"
+            "如果遇到了页面报错或显示异常，可以截图上传，方便我们更快定位问题。")
+
+    # file_uploader 必须放在 form 外面（Streamlit 限制）
+    uploaded_imgs = st.file_uploader(
+        "上传截图（可选，最多 3 张）",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="suggest_imgs",
+    )
+    if uploaded_imgs and len(uploaded_imgs) > 3:
+        st.warning("最多上传 3 张图片，已自动截取前 3 张")
+        uploaded_imgs = uploaded_imgs[:3]
+
     with st.form("suggest_form"):
         content = st.text_area("你的建议", height=200, placeholder="反馈问题、提出需求、随便聊聊...")
         submitted = st.form_submit_button("提交", use_container_width=True, type="primary")
         if submitted and (content or "").strip():
+            # 处理图片：转 base64 存 JSON
+            images_json = None
+            if uploaded_imgs:
+                import base64, json
+                img_list = []
+                for img in uploaded_imgs:
+                    b64 = base64.b64encode(img.read()).decode()
+                    img_list.append({"name": img.name, "data": b64})
+                images_json = json.dumps(img_list, ensure_ascii=False)
             init_memory_db()
             conn = sqlite3.connect(MEMORY_DB)
-            conn.execute("INSERT INTO suggestions (username, content) VALUES (?, ?)",
-                        (st.session_state.get("username", ""), content.strip()))
+            conn.execute("INSERT INTO suggestions (username, content, images) VALUES (?, ?, ?)",
+                        (st.session_state.get("username", ""), content.strip(), images_json))
             conn.commit()
             conn.close()
-            st.success("收到！")
+            st.success("收到！感谢你的反馈")
             log_visit("提建议", content[:50])
 
     st.stop()
@@ -5797,27 +6103,27 @@ if st.session_state.page == "checkin":
         <div style="background:var(--bg-elevated, #f8fafc); border-radius:12px; padding:clamp(12px,2vw,20px); margin-bottom:20px; border:1px solid var(--border, #e2e8f0);">
             <h3 style="margin:0 0 12px 0; color:var(--text-main, #1e293b);">当前阶段：{current_phase}</h3>
             <table style="width:100%; border-collapse:collapse; font-size:clamp(12px,1.5vw,14px);">
-                <tr style="background:#4f46e5; color:#fff;">
+                <tr style="background:var(--primary,#4f46e5); color:#fff;">
                     <th style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px); text-align:left;">阶段</th>
                     <th style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px); text-align:left;">时间</th>
                     <th style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px); text-align:left;">核心任务</th>
                 </tr>
-                <tr style="background:{'#eef2ff' if current_phase=='基础阶段' else '#fff'}">
+                <tr style="background:{'var(--primary-soft,#eef2ff)' if current_phase=='基础阶段' else 'var(--bg-surface,#fff)'}; color:var(--text-main,#1e293b);">
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">基础阶段</td>
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">3-6月</td>
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">全面打基础、吃透教材和基础题</td>
                 </tr>
-                <tr style="background:{'#eef2ff' if current_phase=='强化阶段' else '#f8fafc'}">
+                <tr style="background:{'var(--primary-soft,#eef2ff)' if current_phase=='强化阶段' else 'var(--bg-elevated,#f8fafc)'}; color:var(--text-main,#1e293b);">
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">强化阶段</td>
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">7-9月</td>
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">专项突破、大量刷题、建立做题体系</td>
                 </tr>
-                <tr style="background:{'#eef2ff' if current_phase=='提升阶段' else '#fff'}">
+                <tr style="background:{'var(--primary-soft,#eef2ff)' if current_phase=='提升阶段' else 'var(--bg-surface,#fff)'}; color:var(--text-main,#1e293b);">
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">提升阶段</td>
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">10-11月</td>
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">真题实战、查漏补缺、模考检验</td>
                 </tr>
-                <tr style="background:{'#eef2ff' if current_phase=='冲刺阶段' else '#f8fafc'}">
+                <tr style="background:{'var(--primary-soft,#eef2ff)' if current_phase=='冲刺阶段' else 'var(--bg-elevated,#f8fafc)'}; color:var(--text-main,#1e293b);">
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">冲刺阶段</td>
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">12月</td>
                     <td style="padding:clamp(4px,1vw,8px) clamp(6px,1.5vw,12px);">高频考点押题、心理调整、保持手感</td>
@@ -6130,12 +6436,25 @@ with mid_col:
         # 流式接收（只收集，不立即显示）
         st.markdown('<div class="qa-card">', unsafe_allow_html=True)
         st.markdown("### 💡 回答")
-        thinking_placeholder = st.empty()
-        thinking_placeholder.markdown("<span style='color:#4f46e5;font-weight:600;'>AI 正在思考...</span>", unsafe_allow_html=True)
+
+        @st.fragment(run_every=1)
+        def _think_animation_2():
+            import random as _rnd
+            msg = _rnd.choice(_THINKING_JOKES)
+            st.markdown(
+                f'<div style="text-align:center;padding:18px 0;">'
+                f'<div style="display:inline-block;width:18px;height:18px;border:2.5px solid #475569;'
+                f'border-top-color:#818cf8;border-radius:50%;'
+                f'animation:spin .7s linear infinite;margin-right:10px;vertical-align:middle;"></div>'
+                f'<span style="font-size:.88rem;color:#94a3b8;font-weight:500;">{msg}</span>'
+                f'</div>'
+                f'<style>@keyframes spin{{to{{transform:rotate(360deg)}}</style>',
+                unsafe_allow_html=True
+            )
+        _think_animation_2()
 
         raw_full = ""
         output = None
-        import time as _time
 
         for event in run_pipeline(query or "请识别并解答图中的数学题目", results, st.session_state.selected_model, img_data):
             if event["type"] == "token":
@@ -6144,7 +6463,6 @@ with mid_col:
                 output = event["result"]
 
         # 流结束后，打字效果显示 [ANSWER] 部分
-        thinking_placeholder.empty()
         answer_text = ""
         if output and output.get("answer"):
             answer_text = output["answer"]

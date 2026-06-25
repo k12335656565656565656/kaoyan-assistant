@@ -123,12 +123,24 @@ with tab4:
 with tab5:
     st.subheader("用户建议")
     rows = query_db("""
-        SELECT id, username, content, created_at FROM suggestions ORDER BY id DESC LIMIT 50
+        SELECT id, username, content, images, created_at FROM suggestions ORDER BY id DESC LIMIT 50
     """)
     if rows:
-        for sid, u, c, t in rows:
-            st.markdown(f"**{u}** `{t[:19]}`")
-            st.markdown(f"> {c}")
-            st.markdown("---")
+        import json, base64
+        for sid, u, c, imgs_json, t in rows:
+            with st.container():
+                st.markdown(f"**{u}** `{t[:19]}`  `#{sid}`")
+                st.markdown(f"> {c}")
+                # 渲染图片
+                if imgs_json:
+                    try:
+                        img_list = json.loads(imgs_json)
+                        cols = st.columns(min(len(img_list), 3))
+                        for i, img in enumerate(img_list[:3]):
+                            img_bytes = base64.b64decode(img["data"])
+                            cols[i].image(img_bytes, caption=img.get("name", f"图片{i+1}"), use_container_width=True)
+                    except Exception:
+                        st.caption("（图片数据解析失败）")
+                st.markdown("---")
     else:
         st.info("暂无建议")
