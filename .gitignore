@@ -1,10 +1,14 @@
 # 用户数据
+data/uploads/
+data/temp/
 data/memory.db
 data/*.db
 agent_experience_*.md
 data/user_materials/
 data/tasks/
 data/test_materials/
+*.sqlite
+*.sqlite3
 data/corpus/*.pdf
 data/corpus/*.doc
 data/corpus/*.docx
@@ -42,6 +46,8 @@ venv/
 # 临时文件
 *.log
 test_*.py
+!tests/test_local_material_source_service.py
+!tests/test_material_pipeline.py
 temp/
 benchmark_report_*.txt
 benchmarks/acceptance_*.json
@@ -50,3 +56,10 @@ benchmarks/acceptance_*.json
 
 # 部署同步脚本
 copy_to_git.py
+
+# External local material / skill directories
+cskaoyan-master/
+andrej-karpathy-skills/
+408-rag/
+Medical Postgraduate Entrance Examination/*
+!Medical Postgraduate Entrance Examination/README.md

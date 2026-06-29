@@ -17,12 +17,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from professional_knowledge.catalog import list_enabled_subjects, list_rag_knowledge_bases
+from professional_knowledge.wrong_question_ui import render_wrong_question_workspace
 from repositories.knowledge_repo import (
     ensure_knowledge_schema,
     list_user_knowledge_points,
     save_confirmed_knowledge_points,
     update_knowledge_review_content,
 )
+from repositories.wrong_question_repo import count_user_wrong_questions
 from schemas.knowledge_schema import (
     knowledge_point_to_dict,
     normalize_knowledge_point_draft,
@@ -35,6 +37,13 @@ from services.adaptive_ocr_service import (
 )
 from services.llm_gateway import simple_prompt_completion
 from services.knowledge_json_extractor import extract_knowledge_points_as_drafts
+from services.local_material_source_service import (
+    get_local_material_root,
+    get_local_material_source_for_subject,
+    get_local_material_source_hint,
+    list_local_material_files,
+    read_local_material,
+)
 from services.material_router import route_material_input
 from services.paddle_ocr_service import is_paddle_ocr_available
 from services.professional_knowledge_task_service import (
@@ -195,6 +204,8 @@ def extract_text_from_pdf_paddleocr(file_path, progress_callback=None):
 
 def extract_text_from_image(file_bytes):
     """用自适应本地 OCR 识别图片中的文字，不走 AI 多模态。"""
+    if not (is_rapid_ocr_available() or is_paddle_ocr_available()):
+        raise RuntimeError("OCR 服务不可用。文字型 PDF 仍可直接提取；扫描型 PDF 或图片可能无法识别。")
     result = extract_text_adaptively(
         file_bytes,
         lang=os.environ.get("PADDLE_OCR_LANG", "ch"),
@@ -507,6 +518,57 @@ def _clear_current_draft_session():
     st.session_state["_draft_knowledge_points"] = []
     st.session_state["_draft_knowledge_warnings"] = []
     st.session_state.pop("selected_draft_id", None)
+
+
+def _remove_confirmed_draft_widget_state(draft_id):
+    if not draft_id:
+        return
+    for field_name in _DRAFT_EDITABLE_FIELDS:
+        widget_key = _draft_widget_key(draft_id, field_name)
+        if widget_key in st.session_state:
+            del st.session_state[widget_key]
+
+
+def _remove_confirmed_draft_from_session(draft_id):
+    confirmed = [
+        point
+        for point in st.session_state.get("confirmed_knowledge_drafts", [])
+        if point.get("_draft_id") != draft_id
+    ]
+    st.session_state["confirmed_knowledge_drafts"] = confirmed
+    persisted_ids = [
+        item for item in st.session_state.get("persisted_confirmed_knowledge_ids", [])
+        if item != draft_id
+    ]
+    st.session_state["persisted_confirmed_knowledge_ids"] = persisted_ids
+    _remove_confirmed_draft_widget_state(draft_id)
+
+
+def _restore_confirmed_draft_to_queue(draft_id):
+    confirmed = list(st.session_state.get("confirmed_knowledge_drafts", []))
+    restored_point = None
+    remaining_confirmed = []
+    for point in confirmed:
+        if point.get("_draft_id") == draft_id and restored_point is None:
+            restored_point = point
+        else:
+            remaining_confirmed.append(point)
+
+    if restored_point is None:
+        return False
+
+    drafts = list(st.session_state.get("knowledge_drafts", []))
+    drafts.insert(0, restored_point)
+    st.session_state["knowledge_drafts"] = drafts
+    st.session_state["confirmed_knowledge_drafts"] = remaining_confirmed
+    st.session_state["selected_draft_id"] = draft_id
+    persisted_ids = [
+        item for item in st.session_state.get("persisted_confirmed_knowledge_ids", [])
+        if item != draft_id
+    ]
+    st.session_state["persisted_confirmed_knowledge_ids"] = persisted_ids
+    _sync_legacy_draft_keys()
+    return True
 
 
 def _ensure_persist_state():
@@ -824,7 +886,7 @@ def _format_repo_option(point):
 
 # ==================== UI 渲染 ====================
 
-def render_knowledge_page():
+def _render_knowledge_page_legacy():
     """渲染专业知识库页面（4 个 Tab）"""
     user_id = st.session_state.get("user_id", 1)
     _ensure_session_draft_state()
@@ -1381,7 +1443,7 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
     unsaved_confirmed = [point for point in confirmed_drafts if point.get("_draft_id") not in persisted_ids]
     _render_info_card(
         "待保存知识点",
-        "这里保留本次会话里已经确认的知识点，确认没问题后再统一写入数据库。",
+        "这里只有用户已经确认的知识点会被保存。AI 扩展内容会按字段单独标记，不会伪装成原文事实。",
         metrics=[
             ("待保存", len(unsaved_confirmed)),
             ("总确认数", len(confirmed_drafts)),
@@ -1394,6 +1456,24 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
         ],
         kicker="待保存区",
     )
+    st.info("只有用户确认的知识点才会保存。AI 扩展内容必须标记，不得伪装成原文事实。")
+
+    action_left, action_right = st.columns(2)
+    with action_left:
+        if st.button("全部移回候选区", use_container_width=True, key="restore_all_confirmed_v2"):
+            restored_any = False
+            for point in reversed(list(unsaved_confirmed)):
+                draft_id = point.get("_draft_id")
+                if draft_id and _restore_confirmed_draft_to_queue(draft_id):
+                    restored_any = True
+            if restored_any:
+                st.rerun()
+    with action_right:
+        if st.button("清空待保存区", use_container_width=True, key="clear_confirmed_v2"):
+            for point in list(unsaved_confirmed):
+                _remove_confirmed_draft_from_session(point.get("_draft_id"))
+            if unsaved_confirmed:
+                st.rerun()
 
     if st.button("保存已确认知识点到私有知识库", use_container_width=True, type="primary", key="persist_confirmed_knowledge_v2"):
         if not unsaved_confirmed:
@@ -1425,10 +1505,30 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
                 conn.close()
 
     for idx, point in enumerate(confirmed_drafts, start=1):
-        with st.expander(f"{idx}. {point.get('knowledge_name') or '未命名知识点'}"):
-            st.caption("已保存" if point.get("_draft_id") in persisted_ids else "尚未保存")
-            st.write(point.get("core_definition") or "暂无定义")
+        title = point.get("knowledge_name") or "未命名知识点"
+        point_status = "已保存" if point.get("_draft_id") in persisted_ids else "待保存"
+        point_type = point.get("knowledge_type") or "未标注类型"
+        with st.expander(f"{idx}. {title} · {point_status} · {point_type}", expanded=False):
             st.caption(f"来源：{point.get('source_page') or '未知页码'} / {point.get('source_location') or '未知位置'}")
+            st.write(point.get("core_definition") or "暂无定义")
+            if point.get("source_text"):
+                st.text_area(
+                    "原文依据",
+                    value=point.get("source_text", ""),
+                    height=140,
+                    key=f"confirmed_source_{point.get('_draft_id') or idx}",
+                    disabled=True,
+                )
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("移回候选区", key=f"restore_confirmed_{point.get('_draft_id')}", use_container_width=True):
+                    if _restore_confirmed_draft_to_queue(point.get("_draft_id")):
+                        st.rerun()
+            with c2:
+                if st.button("从待保存移除", key=f"remove_confirmed_{point.get('_draft_id')}", use_container_width=True):
+                    _remove_confirmed_draft_from_session(point.get("_draft_id"))
+                    st.rerun()
 
 
 def _render_private_repository(user_id):
@@ -1741,6 +1841,237 @@ def _count_effective_materials(c, user_id):
     ).fetchone()[0] or 0
 
 
+_ACTIVE_MATERIAL_STATE_KEYS = [
+    "_ocr_preview",
+    "_ocr_material_id",
+    "_ocr_chapter",
+    "_ocr_subject",
+    "_ocr_file_type",
+    "_ocr_filename",
+    "_material_result",
+    "_pk_task_id",
+]
+
+
+def _sanitize_material_filename(filename):
+    safe_name = Path(filename or "").name.strip()
+    if safe_name:
+        return safe_name
+    return f"material-{uuid4().hex}.txt"
+
+
+def _infer_material_file_type(filename, default="pasted_text"):
+    suffix = Path(filename or "").suffix.lower()
+    if not suffix:
+        return default
+    return suffix.lstrip(".")
+
+
+def _persist_user_material_file(user_id, filename, file_bytes):
+    if not file_bytes:
+        return ""
+
+    user_dir = Path(f"data/user_materials/{user_id}")
+    user_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = _sanitize_material_filename(filename)
+    target = user_dir / safe_name
+    if target.exists():
+        target = user_dir / f"{target.stem}-{uuid4().hex[:8]}{target.suffix}"
+    target.write_bytes(file_bytes)
+    return str(target)
+
+
+def _clear_active_material_state(*, discard_unsaved=False):
+    if discard_unsaved:
+        _discard_material_if_unsaved(st.session_state.get("_ocr_material_id"))
+    for key in _ACTIVE_MATERIAL_STATE_KEYS:
+        st.session_state.pop(key, None)
+
+
+def _set_active_material_state(*, material_id, chapter_name, subject, file_type, filename, material_result):
+    st.session_state["_material_result"] = material_result.to_dict()
+    _clear_current_draft_session()
+    st.session_state["_ocr_preview"] = material_result.extracted_text
+    st.session_state["_ocr_material_id"] = material_id
+    st.session_state["_ocr_chapter"] = chapter_name
+    st.session_state["_ocr_subject"] = subject
+    st.session_state["_ocr_file_type"] = file_type
+    st.session_state["_ocr_filename"] = filename
+
+
+def _process_material_submission(
+    *,
+    user_id,
+    subject,
+    chapter_name,
+    filename,
+    file_bytes=None,
+    pasted_text="",
+    open_preview=True,
+    rerun_on_complete=True,
+):
+    safe_filename = _sanitize_material_filename(filename)
+    clean_chapter_name = (chapter_name or "").strip()
+    file_type = _infer_material_file_type(safe_filename)
+    file_path = _persist_user_material_file(user_id, safe_filename, file_bytes) if file_bytes else ""
+
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        c = conn.cursor()
+        c.execute(
+            """INSERT INTO user_materials
+               (user_id, subject, filename, chapter_name, file_path, file_type, processing_status)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+            (user_id, subject, safe_filename, clean_chapter_name, file_path, file_type, ),
+        )
+        material_id = c.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    task = create_professional_task(
+        user_id=user_id,
+        subject=subject,
+        chapter_name=clean_chapter_name,
+        filename=safe_filename,
+        material_id=material_id,
+    )
+    st.session_state["_pk_task_id"] = task.task_id
+
+    status_label = "正在识别资料..."
+    if file_type == "pdf":
+        status_label = "正在检查 PDF 结构..."
+    elif file_type in {"png", "jpg", "jpeg"}:
+        status_label = "正在识别图片文字..."
+    elif pasted_text.strip():
+        status_label = "正在清洗粘贴文本..."
+
+    processing_status = st.status(status_label, expanded=True)
+    processing_progress = st.progress(0)
+
+    def update_ocr_progress(current, total, message):
+        progress_value = current / max(total, 1)
+        processing_progress.progress(min(progress_value, 1.0))
+        processing_status.update(label=message, state="running")
+
+    with processing_status:
+        material_result = route_material_input(
+            file_name=safe_filename,
+            file_path=file_path,
+            file_bytes=file_bytes,
+            pasted_text=pasted_text,
+            image_ocr_fn=extract_text_from_image,
+            pdf_ocr_fn=lambda path: extract_text_from_pdf_paddleocr(
+                path,
+                progress_callback=update_ocr_progress,
+            ),
+            pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()) if file_type == "pdf" else False,
+        )
+
+    if file_type in {"png", "jpg", "jpeg"} and not (is_rapid_ocr_available() or is_paddle_ocr_available()):
+        message = "OCR 服务不可用。文字型 PDF 仍可直接提取；扫描型 PDF 或图片可能无法识别。"
+        if message not in material_result.warnings:
+            material_result.warnings.append(message)
+
+    processing_progress.progress(1.0)
+    processing_status.update(label="资料识别完成", state="complete", expanded=False)
+    _update_current_task(
+        "extracted",
+        note="资料识别完成",
+        source_type=material_result.source_type,
+        process_method=material_result.process_method,
+        warning_count=len(material_result.warnings or []),
+    )
+
+    if open_preview:
+        _set_active_material_state(
+            material_id=material_id,
+            chapter_name=clean_chapter_name,
+            subject=subject,
+            file_type=file_type,
+            filename=safe_filename,
+            material_result=material_result,
+        )
+    engine = material_result.ocr_report.get("primary_engine")
+    method_label = f"，主要引擎为 {engine}" if engine else ""
+    _queue_toast(f"资料提取完成{method_label}")
+    if rerun_on_complete:
+        st.rerun()
+
+    return {
+        "material_id": material_id,
+        "chapter_name": clean_chapter_name,
+        "subject": subject,
+        "file_type": file_type,
+        "filename": safe_filename,
+        "material_result": material_result,
+    }
+
+
+def _build_material_batch_chapter_name(chapter_name: str, filename: str, multi_file: bool) -> str:
+    base = (chapter_name or "").strip()
+    stem = Path(filename or "").stem
+    if not base:
+        return stem
+    if multi_file:
+        return f"{base} - {stem}"
+    return base
+
+
+def _process_material_batch_uploads(*, user_id, subject, chapter_name, uploaded_files) -> None:
+    files = list(uploaded_files or [])
+    if not files:
+        st.warning("请上传至少一个文件。")
+        return
+
+    multi_file = len(files) > 1
+    if multi_file and not (chapter_name or "").strip():
+        st.warning("批量上传时请填写章节 / 文件主题，系统会自动拼接文件名生成每份资料的章节名。")
+        return
+
+    processed = 0
+    last_result = None
+    for index, uploaded_file in enumerate(files, start=1):
+        chapter_value = _build_material_batch_chapter_name(chapter_name, uploaded_file.name, multi_file)
+        last_result = _process_material_submission(
+            user_id=user_id,
+            subject=subject,
+            chapter_name=chapter_value,
+            filename=uploaded_file.name,
+            file_bytes=uploaded_file.getvalue(),
+            open_preview=index == len(files),
+            rerun_on_complete=False,
+        )
+        processed += 1
+
+    if multi_file and processed:
+        _queue_toast(f"已批量导入 {processed} 份资料，当前打开最后一份继续确认。")
+    if last_result:
+        st.rerun()
+
+
+def _format_file_size(size_bytes):
+    value = float(size_bytes or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f}{unit}" if unit == "B" else f"{value:.1f}{unit}"
+        value /= 1024
+    return f"{value:.1f}GB"
+
+
+def _format_local_material_option(item):
+    return f"{item['relative_path']} · {_format_file_size(item.get('size_bytes', 0))}"
+
+
+def _guess_chapter_name_from_relative_path(relative_path):
+    path = Path(relative_path or "")
+    if not relative_path:
+        return ""
+    if len(path.parts) >= 2:
+        return f"{path.parts[-2]} - {path.stem}"
+    return path.stem
+
+
 def _render_rag_knowledge_base_catalog():
     items = list_rag_knowledge_bases()
     if not items:
@@ -1769,7 +2100,7 @@ def _render_rag_knowledge_base_catalog():
         (
             '<div class="pk-section-heading">'
             "<h2>专业课 RAG 知识库</h2>"
-            "<p>当前先启用 408 计算机联考，后续小众专业课按统一框架继续扩展。</p>"
+            "<p>当前已启用 408 与医学考研，后续小众专业课按统一框架继续扩展。</p>"
             "</div>"
             '<div class="kb-catalog">'
             f'<div class="kb-catalog-grid">{"".join(card_html)}</div>'
@@ -1818,33 +2149,138 @@ def render_knowledge_page():
         total_subjects = c.execute("SELECT COUNT(DISTINCT subject) FROM user_knowledge WHERE user_id=?", (user_id,)).fetchone()[0] or 0
     finally:
         conn.close()
+    total_wrong_questions = count_user_wrong_questions(user_id)
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("资料", total_materials)
     m2.metric("知识点", total_knowledge)
-    m3.metric("学科", total_subjects)
-    m4.metric("待确认", len(st.session_state.get("knowledge_drafts") or []))
+    m3.metric("错题", total_wrong_questions)
+    m4.metric("学科", total_subjects)
+    m5.metric("待确认", len(st.session_state.get("knowledge_drafts") or []))
 
-    tab_input, tab_confirm, tab_repo = st.tabs(["1 识别资料", "2 确认入库", "3 知识库复习"])
+    tab_input, tab_confirm, tab_repo, tab_wrong = st.tabs(["1 识别资料", "2 确认入库", "3 我的知识库", "4 错题本"])
     subjects_kb = list_enabled_subjects()
 
     with tab_input:
         _render_stage_strip("1")
         selected_subject = st.selectbox("学科", subjects_kb, key="kb_subject_v2")
+        local_material_source = get_local_material_source_for_subject(selected_subject)
+        local_tab_label = local_material_source.tab_label if local_material_source else "本地资料源"
         intro_left, intro_right = st.columns([1.4, 0.9])
         with intro_left:
-            st.subheader("上传或粘贴资料")
-            st.caption("文字型 PDF 直接提取；扫描件自动切换自适应 OCR，并保留页码、题号和原文依据。")
-            with st.form("upload_material_v2"):
-                chapter_name = st.text_input("章节 / 文件主题", placeholder="例如：数据结构 - 树与二叉树")
-                uploaded_file = st.file_uploader("上传 PDF / 图片 / TXT", type=["pdf", "png", "jpg", "jpeg", "txt"], key="material_upload_v2")
-                pasted_text = st.text_area("或粘贴文本", height=160, placeholder="也可以直接粘贴讲义、笔记或真题解析文本")
-                submitted = st.form_submit_button("开始识别", use_container_width=True, type="primary")
+            st.subheader("导入待识别资料")
+            st.caption("先确认原始文本，再抽取候选知识点。所有来源最终都会走同一条清洗、抽取、确认、入库链路。")
+            upload_tab, paste_tab, local_tab = st.tabs(["上传资料", "粘贴文本", local_tab_label])
+
+            with upload_tab:
+                with st.form("upload_material_v2"):
+                    upload_chapter_name = st.text_input("章节 / 文件主题", placeholder="例如：数据结构 - 树与二叉树；多文件时将作为批次前缀")
+                    uploaded_files = st.file_uploader(
+                        "上传 PDF / 图片 / TXT（支持多文件）",
+                        type=["pdf", "png", "jpg", "jpeg", "txt"],
+                        key="material_upload_v2",
+                        accept_multiple_files=True,
+                    )
+                    upload_submitted = st.form_submit_button("开始识别", use_container_width=True, type="primary")
+                if upload_submitted:
+                    if not uploaded_files:
+                        st.warning("请上传 PDF / 图片 / TXT 文件。")
+                    else:
+                        _process_material_batch_uploads(
+                            user_id=user_id,
+                            subject=selected_subject,
+                            chapter_name=upload_chapter_name,
+                            uploaded_files=uploaded_files,
+                        )
+
+            with paste_tab:
+                with st.form("paste_material_v2"):
+                    pasted_chapter_name = st.text_input("章节 / 文件主题", placeholder="例如：操作系统 - 进程管理")
+                    pasted_text = st.text_area("粘贴文本", height=200, placeholder="也可以直接粘贴讲义、笔记或真题解析文本")
+                    paste_submitted = st.form_submit_button("确认文本并开始识别", use_container_width=True, type="primary")
+                if paste_submitted:
+                    if not pasted_chapter_name.strip():
+                        st.warning("请填写章节或文件主题。")
+                    elif not pasted_text.strip():
+                        st.warning("请先粘贴要识别的文本。")
+                    else:
+                        _process_material_submission(
+                            user_id=user_id,
+                            subject=selected_subject,
+                            chapter_name=pasted_chapter_name,
+                            filename="pasted_text.txt",
+                            pasted_text=pasted_text,
+                        )
+
+            with local_tab:
+                if local_material_source is None:
+                    st.info("当前学科暂未配置本地资料源。你仍然可以通过上传 PDF / 图片 / TXT 或粘贴文本使用专业课识别系统。")
+                else:
+                    local_root = get_local_material_root(local_material_source.key)
+                    if local_root is None:
+                        st.info(
+                            f"未配置 {local_material_source.title} 目录。"
+                            f" 可通过 {get_local_material_source_hint(local_material_source.key)} 提供资料。"
+                        )
+                        local_files = []
+                    else:
+                        local_files = list_local_material_files(local_material_source.key, limit=300)
+                    if not local_files:
+                        if local_root is not None:
+                            st.info(f"已配置 {local_material_source.title} 目录，但当前没有读取到可导入的 PDF / 图片 / TXT / MD 文件。")
+                    else:
+                        local_query = st.text_input(
+                            "搜索本地资料",
+                            placeholder="按文件名或相对路径筛选",
+                            key=f"local_material_search_{local_material_source.key}_v2",
+                        )
+                        filtered_files = [
+                            item for item in local_files
+                            if not local_query.strip()
+                            or local_query.lower() in item["name"].lower()
+                            or local_query.lower() in item["relative_path"].lower()
+                        ]
+                        st.caption(f"资料根目录：{local_root}")
+                        if not filtered_files:
+                            st.warning("没有匹配的本地资料文件。")
+                        else:
+                            local_file_map = {item["relative_path"]: item for item in filtered_files}
+                            selected_relative_path = st.selectbox(
+                                "选择本地资料",
+                                options=list(local_file_map.keys()),
+                                format_func=lambda key: _format_local_material_option(local_file_map[key]),
+                                key=f"local_material_selected_{local_material_source.key}_v2",
+                            )
+                            local_chapter_name = st.text_input(
+                                "章节 / 文件主题",
+                                value=_guess_chapter_name_from_relative_path(selected_relative_path),
+                                key=f"local_material_chapter_{local_material_source.key}_v2",
+                            )
+                            if st.button(
+                                "导入并识别",
+                                use_container_width=True,
+                                type="primary",
+                                key=f"import_local_material_{local_material_source.key}_v2",
+                            ):
+                                if not local_chapter_name.strip():
+                                    st.warning("请填写章节或文件主题。")
+                                else:
+                                    try:
+                                        filename, file_bytes = read_local_material(local_material_source.key, selected_relative_path)
+                                        _process_material_submission(
+                                            user_id=user_id,
+                                            subject=selected_subject,
+                                            chapter_name=local_chapter_name,
+                                            filename=filename,
+                                            file_bytes=file_bytes,
+                                        )
+                                    except Exception as exc:
+                                        st.error(f"导入 {local_material_source.title} 失败：{exc}")
 
         with intro_right:
             _render_info_card(
                 "当前导入策略",
-                "先拿到资料原文，再做噪声屏蔽和可引用整理；抽取知识点只是第二步，不直接跳过原始证据。",
+                "文字型 PDF 先走 PyMuPDF 直提，质量不足时自动尝试 OCR 回退；图片走 OCR，TXT / MD / 粘贴文本直接清洗后进入人工确认。",
                 metrics=[
                     ("默认学科", selected_subject),
                     ("OCR 引擎", "RapidOCR + PaddleOCR"),
@@ -1858,97 +2294,6 @@ def render_knowledge_page():
                 kicker="流程说明",
             )
             _render_material_library_snapshot(user_id, selected_subject)
-
-        if submitted:
-            if uploaded_file and pasted_text.strip():
-                st.warning("上传文件和粘贴文本请选择一种。")
-            elif not chapter_name.strip():
-                st.warning("请填写章节或文件主题。")
-            elif not uploaded_file and not pasted_text.strip():
-                st.warning("请上传资料或粘贴文本。")
-            else:
-                file_path = ""
-                file_bytes = None
-                filename = "pasted_text.txt"
-                file_type = "pasted_text"
-                if uploaded_file:
-                    user_dir = Path(f"data/user_materials/{user_id}")
-                    user_dir.mkdir(parents=True, exist_ok=True)
-                    file_bytes = uploaded_file.getvalue()
-                    file_path_obj = user_dir / uploaded_file.name
-                    file_path_obj.write_bytes(file_bytes)
-                    file_path = str(file_path_obj)
-                    filename = uploaded_file.name
-                    file_type = uploaded_file.name.rsplit(".", 1)[-1].lower() if "." in uploaded_file.name else "unknown"
-
-                conn = sqlite3.connect(MEMORY_DB)
-                try:
-                    c = conn.cursor()
-                    c.execute(
-                        """INSERT INTO user_materials
-                           (user_id, subject, filename, chapter_name, file_path, file_type, processing_status)
-                           VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-                        (user_id, selected_subject, filename, chapter_name.strip(), file_path, file_type),
-                    )
-                    material_id = c.lastrowid
-                    conn.commit()
-                finally:
-                    conn.close()
-
-                task = create_professional_task(
-                    user_id=user_id,
-                    subject=selected_subject,
-                    chapter_name=chapter_name.strip(),
-                    filename=filename,
-                    material_id=material_id,
-                )
-                st.session_state["_pk_task_id"] = task.task_id
-
-                processing_status = st.status("正在检查 PDF 结构...", expanded=True)
-                processing_progress = st.progress(0)
-
-                def update_ocr_progress(current, total, message):
-                    progress_value = current / max(total, 1)
-                    processing_progress.progress(min(progress_value, 1.0))
-                    processing_status.update(label=message, state="running")
-
-                with processing_status:
-                    material_result = route_material_input(
-                        file_name=filename,
-                        file_path=file_path,
-                        file_bytes=file_bytes,
-                        pasted_text=pasted_text,
-                        image_ocr_fn=extract_text_from_image,
-                        pdf_ocr_fn=lambda path: extract_text_from_pdf_paddleocr(
-                            path,
-                            progress_callback=update_ocr_progress,
-                        ),
-                        pdf_ocr_available=(
-                            is_rapid_ocr_available() or is_paddle_ocr_available()
-                        ) if file_type == "pdf" else False,
-                    )
-                processing_progress.progress(1.0)
-                processing_status.update(label="资料识别完成", state="complete", expanded=False)
-                _update_current_task(
-                    "extracted",
-                    note="资料识别完成",
-                    source_type=material_result.source_type,
-                    process_method=material_result.process_method,
-                    warning_count=len(material_result.warnings or []),
-                )
-
-                st.session_state._material_result = material_result.to_dict()
-                _clear_current_draft_session()
-                st.session_state._ocr_preview = material_result.extracted_text
-                st.session_state._ocr_material_id = material_id
-                st.session_state._ocr_chapter = chapter_name.strip()
-                st.session_state._ocr_subject = selected_subject
-                st.session_state._ocr_file_type = file_type
-                st.session_state._ocr_filename = filename
-                engine = material_result.ocr_report.get("primary_engine")
-                method_label = f"，主要引擎为 {engine}" if engine else ""
-                _queue_toast(f"资料提取完成{method_label}")
-                st.rerun()
 
         if st.session_state.get("_ocr_preview") is not None:
             ocr_text = st.session_state._ocr_preview
@@ -1993,9 +2338,7 @@ def render_knowledge_page():
                             st.rerun()
                 with c2:
                     if st.button("重新上传", use_container_width=True):
-                        _discard_material_if_unsaved(st.session_state.get("_ocr_material_id"))
-                        for key in ["_ocr_preview", "_ocr_material_id", "_ocr_chapter", "_ocr_subject", "_ocr_file_type", "_ocr_filename", "_material_result"]:
-                            st.session_state.pop(key, None)
+                        _clear_active_material_state(discard_unsaved=True)
                         _clear_current_draft_session()
                         st.rerun()
 
@@ -2078,10 +2421,29 @@ def render_knowledge_page():
         st.markdown(
             """
             <div class="pk-section-heading">
-                <h2>私有知识库与复习</h2>
+                <h2>我的知识库与复习</h2>
                 <p>检索已入库知识点，查看原文依据，维护掌握状态，并为后续 RAG 和关系图保留稳定的数据入口。</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
         _render_private_repository(user_id)
+
+    with tab_wrong:
+        _render_stage_strip("3")
+        st.markdown(
+            """
+            <div class="pk-section-heading">
+                <h2>错题上传与复习</h2>
+                <p>批量上传错题截图，OCR 后先生成草稿，再统一加入错题本，后续可像背单词一样持续复习。</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        render_wrong_question_workspace(
+            user_id,
+            subjects_kb,
+            image_ocr_fn=extract_text_from_image,
+            pdf_ocr_fn=lambda path: extract_text_from_pdf_paddleocr(path),
+            pdf_ocr_available=is_rapid_ocr_available() or is_paddle_ocr_available(),
+        )

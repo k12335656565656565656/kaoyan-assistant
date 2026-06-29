@@ -11,6 +11,18 @@ def _prepare_extraction_text(text):
     return clean_material_for_extraction(cleaned)
 
 
+def _decode_text_bytes(file_bytes):
+    if not file_bytes:
+        return ""
+
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            return file_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return file_bytes.decode("utf-8", errors="ignore")
+
+
 def _build_material_result(
     *,
     source_type,
@@ -65,12 +77,10 @@ def route_material_input(
         )
 
     suffix = Path(file_name or "").suffix.lower()
-    if suffix == ".txt":
-        decoded = ""
-        if file_bytes:
-            decoded = file_bytes.decode("utf-8", errors="ignore")
+    if suffix in {".txt", ".md"}:
+        decoded = _decode_text_bytes(file_bytes)
         clean_result = _prepare_extraction_text(decoded)
-        warnings = ["当前输入来自 txt 文件，按直接文本处理"] + list(clean_result.warnings)
+        warnings = [f"当前输入来自 {suffix.lstrip('.')} 文件，按直接文本处理"] + list(clean_result.warnings)
         if len(clean_result.cleaned_text) < 80:
             warnings.append("文本较短，请确认内容完整")
         return _build_material_result(
@@ -134,7 +144,7 @@ def route_material_input(
                 ocr_report=ocr_report,
             )
 
-        warnings.append("OCR 服务不可用，已保留直接提取结果")
+        warnings.append("OCR 服务不可用。文字型 PDF 仍可直接提取；扫描型 PDF 或图片可能无法识别。已保留直接提取结果。")
         clean_result = _prepare_extraction_text(quality["cleaned_text"])
         return _build_material_result(
             source_type="pdf",
