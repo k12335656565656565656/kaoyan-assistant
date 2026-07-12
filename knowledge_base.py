@@ -6,17 +6,22 @@
 import streamlit as st
 import sqlite3
 import os
+import hashlib
+import html
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 import json
 import base64
 import urllib.request
-import urllib.error
-import re
 from pathlib import Path
 from uuid import uuid4
 
-from professional_knowledge.catalog import list_enabled_subjects, list_rag_knowledge_bases
+from professional_knowledge.catalog import (
+    get_rag_knowledge_base_by_subject,
+    list_enabled_subjects,
+    list_rag_knowledge_bases,
+    save_custom_subject_profile,
+)
 from professional_knowledge.wrong_question_ui import render_wrong_question_workspace
 from repositories.knowledge_repo import (
     ensure_knowledge_schema,
@@ -24,12 +29,22 @@ from repositories.knowledge_repo import (
     save_confirmed_knowledge_points,
     update_knowledge_review_content,
 )
+from repositories.material_repo import (
+    create_material,
+    ensure_material_schema,
+    list_resumable_materials,
+    mark_material_status,
+    save_confirmed_text,
+    save_extraction_result,
+    save_workflow_snapshot,
+)
 from repositories.wrong_question_repo import count_user_wrong_questions
 from schemas.knowledge_schema import (
     knowledge_point_to_dict,
     normalize_knowledge_point_draft,
     validate_required_fields,
 )
+from schemas.material_schema import MaterialResult
 from services.adaptive_ocr_service import (
     extract_pdf_text_adaptively,
     extract_text_adaptively,
@@ -57,6 +72,10 @@ MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
 API_KEY = os.environ.get("AI_API_KEY", "")
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
+
+
+def _escape_html(value):
+    return html.escape(str(value if value is not None else ""), quote=True)
 
 
 # ==================== 数据库初始化 ====================
@@ -114,6 +133,7 @@ def init_knowledge_db(conn):
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
 
+    ensure_material_schema(conn)
     ensure_knowledge_schema(conn)
 
 
@@ -497,7 +517,14 @@ def _confirm_draft_in_session(point):
 def _confirm_all_drafts_in_session():
     drafts = list(st.session_state.get("knowledge_drafts", []))
     confirmed = list(st.session_state.get("confirmed_knowledge_drafts", []))
-    confirmed.extend(drafts)
+    synced_drafts = []
+    for point in drafts:
+        draft_id = point.get("_draft_id")
+        if draft_id:
+            synced_drafts.append(_build_draft_from_widget(draft_id, point))
+        else:
+            synced_drafts.append(point)
+    confirmed.extend(synced_drafts)
     st.session_state["confirmed_knowledge_drafts"] = confirmed
     for point in drafts:
         _remove_draft_widget_state(point.get("_draft_id"))
@@ -580,6 +607,115 @@ def _ensure_persist_state():
         st.session_state["persisted_confirmed_knowledge_ids"] = []
 
 
+def _build_active_workflow_snapshot():
+    return {
+        "remaining_drafts": list(st.session_state.get("knowledge_drafts") or []),
+        "confirmed_drafts": list(st.session_state.get("confirmed_knowledge_drafts") or []),
+        "deleted_count": int(st.session_state.get("deleted_knowledge_draft_count", 0) or 0),
+        "warnings": list(st.session_state.get("knowledge_draft_warnings") or []),
+        "persisted_draft_ids": list(st.session_state.get("persisted_confirmed_knowledge_ids") or []),
+    }
+
+
+def _persist_active_workflow_snapshot(status="drafted"):
+    material_id = st.session_state.get("_ocr_material_id")
+    if not material_id:
+        return False
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        snapshot = _build_active_workflow_snapshot()
+        if status == "drafted":
+            confirmed_ids = {
+                point.get("_draft_id")
+                for point in snapshot.get("confirmed_drafts") or []
+                if point.get("_draft_id")
+            }
+            persisted_ids = set(snapshot.get("persisted_draft_ids") or [])
+            if (
+                not snapshot.get("remaining_drafts")
+                and confirmed_ids
+                and confirmed_ids.issubset(persisted_ids)
+            ):
+                status = "done"
+        save_workflow_snapshot(
+            conn,
+            material_id,
+            snapshot,
+            status=status,
+        )
+        conn.commit()
+        return True
+    except Exception as exc:
+        conn.rollback()
+        st.warning(f"当前操作已在页面中生效，但自动保存恢复进度失败：{exc}")
+        return False
+    finally:
+        conn.close()
+
+
+def _persist_active_confirmed_text(text, status="text_confirmed"):
+    material_id = st.session_state.get("_ocr_material_id")
+    if not material_id:
+        return False
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        save_confirmed_text(conn, material_id, text, status=status)
+        conn.commit()
+        return True
+    except Exception as exc:
+        conn.rollback()
+        st.error(f"保存人工确认文本失败：{exc}")
+        return False
+    finally:
+        conn.close()
+
+
+def _apply_workflow_snapshot(snapshot):
+    if not isinstance(snapshot, dict):
+        return
+    remaining = snapshot.get("remaining_drafts") or []
+    confirmed = snapshot.get("confirmed_drafts") or []
+    st.session_state["knowledge_drafts"] = [_prepare_draft_for_session(point) for point in remaining]
+    st.session_state["confirmed_knowledge_drafts"] = [_prepare_draft_for_session(point) for point in confirmed]
+    st.session_state["deleted_knowledge_draft_count"] = int(snapshot.get("deleted_count", 0) or 0)
+    st.session_state["knowledge_draft_warnings"] = list(snapshot.get("warnings") or [])
+    st.session_state["persisted_confirmed_knowledge_ids"] = list(snapshot.get("persisted_draft_ids") or [])
+    _sync_legacy_draft_keys()
+
+
+def _restore_material_record(record):
+    payload = dict(record.get("material_result") or {})
+    payload.setdefault("source_type", record.get("source_type") or "pasted_text")
+    payload.setdefault("process_method", record.get("process_method") or "pasted_text")
+    payload.setdefault("raw_extracted_text", record.get("raw_extracted_text") or "")
+    payload.setdefault("extracted_text", record.get("extracted_text") or "")
+    payload.setdefault("confidence", 0.0)
+    confirmed_text = record.get("confirmed_text") or ""
+    if confirmed_text:
+        payload["extracted_text"] = confirmed_text
+    material_result = MaterialResult.from_dict(payload)
+    _set_active_material_state(
+        material_id=record.get("id"),
+        chapter_name=record.get("chapter_name") or "",
+        subject=record.get("subject") or "其他",
+        file_type=record.get("file_type") or "pasted_text",
+        filename=record.get("filename") or "material.txt",
+        material_result=material_result,
+    )
+    st.session_state.pop("_pk_task_id", None)
+    _apply_workflow_snapshot(record.get("workflow_snapshot") or {})
+
+
+def _material_status_label(status):
+    return {
+        "pending": "等待处理",
+        "extracted": "文本待核对",
+        "text_confirmed": "文本已核对",
+        "drafted": "知识点待确认",
+        "failed": "处理失败",
+    }.get(status or "pending", status or "等待处理")
+
+
 def _render_stage_strip(active_step):
     steps = [
         ("1", "资料导入", "导入 PDF、图片或粘贴文本，系统先做提取与清洗。"),
@@ -609,8 +745,8 @@ def _render_info_card(title, body, metrics=None, badges=None, kicker=""):
             items.append(
                 (
                     '<div class="pk-meta-item">'
-                    f"<span>{label}</span>"
-                    f"<strong>{value}</strong>"
+                    f"<span>{_escape_html(label)}</span>"
+                    f"<strong>{_escape_html(value)}</strong>"
                     "</div>"
                 )
             )
@@ -621,16 +757,18 @@ def _render_info_card(title, body, metrics=None, badges=None, kicker=""):
         badge_nodes = []
         for text, tone in badges:
             tone_class = f" {tone}" if tone else ""
-            badge_nodes.append(f'<span class="pk-inline-badge{tone_class}">{text}</span>')
+            badge_nodes.append(
+                f'<span class="pk-inline-badge{tone_class}">{_escape_html(text)}</span>'
+            )
         badge_html = f'<div class="pk-inline-badges">{"".join(badge_nodes)}</div>'
 
-    kicker_html = f'<div class="pk-kicker">{kicker}</div>' if kicker else ""
+    kicker_html = f'<div class="pk-kicker">{_escape_html(kicker)}</div>' if kicker else ""
     st.markdown(
         (
             '<div class="pk-summary-card">'
             f"{kicker_html}"
-            f"<h3>{title}</h3>"
-            f"<p>{body}</p>"
+            f"<h3>{_escape_html(title)}</h3>"
+            f"<p>{_escape_html(body)}</p>"
             f"{metric_html}"
             f"{badge_html}"
             "</div>"
@@ -702,7 +840,7 @@ def _render_material_report(material_result):
         )
 
     if warnings:
-        lines = "".join(f"<li>{warning}</li>" for warning in warnings[:6])
+        lines = "".join(f"<li>{_escape_html(warning)}</li>" for warning in warnings[:6])
         st.markdown(
             f"""
             <div class="pk-panel">
@@ -775,7 +913,14 @@ def _update_current_task(status, note=None, **updates):
     update_professional_task_status(task_id, status, note=note, **updates)
 
 
-def _extract_drafts_with_progress(*, text, subject, chapter_name, max_points=12):
+def _extract_drafts_with_progress(
+    *,
+    text,
+    subject,
+    chapter_name,
+    max_points=12,
+    extraction_guidance="",
+):
     progress_status = st.status("正在整理待抽取文本...", expanded=True)
     progress_bar = st.progress(0)
 
@@ -793,6 +938,7 @@ def _extract_drafts_with_progress(*, text, subject, chapter_name, max_points=12)
                 max_points=max_points,
                 llm_callable=lambda prompt: _call_llm_api(prompt, model="mimo-v2.5", max_tokens=4000),
                 progress_callback=update_progress,
+                extraction_guidance=extraction_guidance,
             )
     except Exception:
         progress_status.update(label="候选知识点抽取失败", state="error", expanded=True)
@@ -824,9 +970,10 @@ def _render_material_library_snapshot(user_id, selected_subject):
     top_rows = materials[:5]
     items = []
     for material_id, filename, chapter_name, status, knowledge_count in top_rows:
-        status_text = "已入库" if status == "done" else "处理中"
+        status_text = "已入库" if status == "done" else _material_status_label(status)
         items.append(
-            f"<li>{chapter_name or filename} · {filename} · {status_text} · {knowledge_count} 条知识点</li>"
+            f"<li>{_escape_html(chapter_name or filename)} · {_escape_html(filename)} · "
+            f"{_escape_html(status_text)} · {_escape_html(knowledge_count)} 条知识点</li>"
         )
     st.markdown(
         f"""
@@ -843,17 +990,65 @@ def _render_material_library_snapshot(user_id, selected_subject):
     if recent_tasks:
         task_items = []
         for task in recent_tasks:
-            task_items.append(f"<li>{task.chapter_name or task.filename} · {task.status} · {task.updated_at}</li>")
+            task_items.append(
+                f"<li>{_escape_html(task.chapter_name or task.filename)} · "
+                f"{_escape_html(task.status)} · {_escape_html(task.updated_at)}</li>"
+            )
         st.markdown(
             f"""
             <div class="pk-panel">
                 <h3>抽取任务轨迹</h3>
-                <p>保留最近几次抽取流程状态，便于恢复和对比每次识别、抽取、保存的结果。</p>
+                <p>保留最近几次抽取流程状态，用于对比每次识别、抽取与保存结果；未完成资料请从页面顶部继续。</p>
                 <ul class="pk-list">{"".join(task_items)}</ul>
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+
+def _render_resume_material_panel(user_id):
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        records = list_resumable_materials(conn, user_id, limit=20)
+    finally:
+        conn.close()
+
+    resumable = [
+        record
+        for record in records
+        if record.get("confirmed_text")
+        or record.get("extracted_text")
+        or (record.get("workflow_snapshot") or {}).get("remaining_drafts")
+        or (record.get("workflow_snapshot") or {}).get("confirmed_drafts")
+    ]
+    if not resumable:
+        return
+
+    _render_info_card(
+        "继续上次未完成的资料",
+        "文本、候选草稿和已确认队列已保存到 SQLite。刷新页面或重新启动后，可以从这里继续。",
+        metrics=[
+            ("可继续资料", len(resumable)),
+            ("最近状态", _material_status_label(resumable[0].get("processing_status"))),
+        ],
+        badges=[("自动保存工作流", "good")],
+        kicker="继续处理",
+    )
+    record_map = {str(record.get("id")): record for record in resumable if record.get("id") is not None}
+    selected_id = st.selectbox(
+        "选择未完成资料",
+        options=list(record_map.keys()),
+        format_func=lambda material_id: (
+            f"{record_map[material_id].get('subject') or '未分类'} · "
+            f"{record_map[material_id].get('chapter_name') or record_map[material_id].get('filename') or '未命名资料'} · "
+            f"{_material_status_label(record_map[material_id].get('processing_status'))}"
+        ),
+        key="resume_material_id_v1",
+    )
+    if st.button("继续处理这份资料", use_container_width=True, type="primary", key="resume_material_v1"):
+        _restore_material_record(record_map[selected_id])
+        _queue_toast("已恢复资料和确认进度")
+        st.rerun()
 
 
 def _format_draft_option(point):
@@ -1360,8 +1555,8 @@ def _render_draft_editor(point, idx):
     st.markdown(
         f"""
         <div class="pk-section-heading">
-            <h2>{idx}. {title}</h2>
-            <p>{ktype} · 请核对核心定义、考法、原文依据和页码，确认后再写入私有知识库。</p>
+            <h2>{idx}. {_escape_html(title)}</h2>
+            <p>{_escape_html(ktype)} · 请核对核心定义、考法、原文依据和页码，确认后再写入私有知识库。</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1414,15 +1609,18 @@ def _render_draft_editor(point, idx):
     with b1:
         if st.button("保存修改", key=f"save_draft_{draft_id}", use_container_width=True):
             _replace_draft_in_session(_build_draft_from_widget(draft_id, point))
+            _persist_active_workflow_snapshot(status="drafted")
             st.success("已保存修改")
             st.rerun()
     with b2:
         if st.button("删除当前草稿", key=f"delete_draft_{draft_id}", use_container_width=True):
             _remove_draft_from_session(draft_id)
+            _persist_active_workflow_snapshot(status="drafted")
             st.rerun()
     with b3:
         if st.button("确认并加入待保存", key=f"confirm_draft_{draft_id}", use_container_width=True, type="primary"):
             _confirm_draft_in_session(_build_draft_from_widget(draft_id, point))
+            _persist_active_workflow_snapshot(status="drafted")
             st.rerun()
 
 
@@ -1441,6 +1639,11 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
 
     persisted_ids = set(st.session_state.get("persisted_confirmed_knowledge_ids") or [])
     unsaved_confirmed = [point for point in confirmed_drafts if point.get("_draft_id") not in persisted_ids]
+    invalid_confirmed = []
+    for point in unsaved_confirmed:
+        point_warnings = validate_required_fields(point)
+        if point_warnings:
+            invalid_confirmed.append((point, point_warnings))
     _render_info_card(
         "待保存知识点",
         "这里只有用户已经确认的知识点会被保存。AI 扩展内容会按字段单独标记，不会伪装成原文事实。",
@@ -1457,6 +1660,15 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
         kicker="待保存区",
     )
     st.info("只有用户确认的知识点才会保存。AI 扩展内容必须标记，不得伪装成原文事实。")
+    if invalid_confirmed:
+        invalid_names = "、".join(
+            (point.get("knowledge_name") or "未命名知识点")
+            for point, _warnings in invalid_confirmed[:5]
+        )
+        st.error(
+            f"有 {len(invalid_confirmed)} 条知识点缺少名称、核心定义或原文依据，暂不能入库：{invalid_names}。"
+            "请先移回候选区补全。"
+        )
 
     action_left, action_right = st.columns(2)
     with action_left:
@@ -1467,36 +1679,84 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
                 if draft_id and _restore_confirmed_draft_to_queue(draft_id):
                     restored_any = True
             if restored_any:
+                _persist_active_workflow_snapshot(status="drafted")
                 st.rerun()
     with action_right:
         if st.button("清空待保存区", use_container_width=True, key="clear_confirmed_v2"):
             for point in list(unsaved_confirmed):
                 _remove_confirmed_draft_from_session(point.get("_draft_id"))
             if unsaved_confirmed:
+                _persist_active_workflow_snapshot(status="drafted")
                 st.rerun()
 
-    if st.button("保存已确认知识点到私有知识库", use_container_width=True, type="primary", key="persist_confirmed_knowledge_v2"):
+    if st.button(
+        "保存已确认知识点到私有知识库",
+        use_container_width=True,
+        type="primary",
+        key="persist_confirmed_knowledge_v2",
+        disabled=bool(invalid_confirmed),
+    ):
         if not unsaved_confirmed:
             st.warning("暂无待保存知识点。")
         else:
             conn = sqlite3.connect(MEMORY_DB)
             try:
+                subject_profile = get_rag_knowledge_base_by_subject(selected_subject)
                 material_meta = {
                     "material_id": material_id,
                     "subject": selected_subject,
+                    "subject_key": subject_profile.key if subject_profile else "",
                     "chapter_name": chapter_name,
                     "source_type": material_result.get("source_type", "") if material_result else "",
                     "process_method": material_result.get("process_method", "") if material_result else "",
                     "material_filename": st.session_state.get("_ocr_filename", ""),
                 }
-                saved_count = save_confirmed_knowledge_points(conn, user_id, unsaved_confirmed, material_meta=material_meta)
+                saved_count = save_confirmed_knowledge_points(
+                    conn,
+                    user_id,
+                    unsaved_confirmed,
+                    material_meta=material_meta,
+                    strict=True,
+                    finalize_material=False,
+                )
+                next_persisted_ids = persisted_ids.union(
+                    {
+                        point.get("_draft_id")
+                        for point in unsaved_confirmed
+                        if point.get("_draft_id")
+                    }
+                )
+                snapshot = _build_active_workflow_snapshot()
+                snapshot["persisted_draft_ids"] = list(next_persisted_ids)
+                confirmed_ids = {
+                    point.get("_draft_id")
+                    for point in snapshot.get("confirmed_drafts") or []
+                    if point.get("_draft_id")
+                }
+                workflow_complete = (
+                    not snapshot.get("remaining_drafts")
+                    and bool(confirmed_ids)
+                    and confirmed_ids.issubset(next_persisted_ids)
+                )
+                if material_id:
+                    save_workflow_snapshot(
+                        conn,
+                        material_id,
+                        snapshot,
+                        status="done" if workflow_complete else "drafted",
+                    )
                 conn.commit()
                 st.session_state["persisted_knowledge_count"] = saved_count
-                st.session_state["persisted_confirmed_knowledge_ids"] = list(
-                    persisted_ids.union({point.get("_draft_id") for point in unsaved_confirmed})
+                st.session_state["persisted_confirmed_knowledge_ids"] = list(next_persisted_ids)
+                _update_current_task(
+                    "saved" if workflow_complete else "drafted",
+                    note=f"已保存 {saved_count} 条知识点",
                 )
-                _update_current_task("saved", note=f"已保存 {saved_count} 条知识点")
-                st.success(f"已保存 {saved_count} 条知识点")
+                skipped_count = max(0, len(unsaved_confirmed) - saved_count)
+                if skipped_count:
+                    st.success(f"已新增 {saved_count} 条知识点，自动跳过 {skipped_count} 条重复内容")
+                else:
+                    st.success(f"已保存 {saved_count} 条知识点")
                 st.rerun()
             except Exception as e:
                 conn.rollback()
@@ -1506,7 +1766,8 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
 
     for idx, point in enumerate(confirmed_drafts, start=1):
         title = point.get("knowledge_name") or "未命名知识点"
-        point_status = "已保存" if point.get("_draft_id") in persisted_ids else "待保存"
+        is_persisted = point.get("_draft_id") in persisted_ids
+        point_status = "已保存" if is_persisted else "待保存"
         point_type = point.get("knowledge_type") or "未标注类型"
         with st.expander(f"{idx}. {title} · {point_status} · {point_type}", expanded=False):
             st.caption(f"来源：{point.get('source_page') or '未知页码'} / {point.get('source_location') or '未知位置'}")
@@ -1520,15 +1781,20 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
                     disabled=True,
                 )
 
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("移回候选区", key=f"restore_confirmed_{point.get('_draft_id')}", use_container_width=True):
-                    if _restore_confirmed_draft_to_queue(point.get("_draft_id")):
+            if is_persisted:
+                st.caption("该条已写入私有知识库；如需修改，请在“我的知识库”中操作。")
+            else:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("移回候选区", key=f"restore_confirmed_{point.get('_draft_id')}", use_container_width=True):
+                        if _restore_confirmed_draft_to_queue(point.get("_draft_id")):
+                            _persist_active_workflow_snapshot(status="drafted")
+                            st.rerun()
+                with c2:
+                    if st.button("从待保存移除", key=f"remove_confirmed_{point.get('_draft_id')}", use_container_width=True):
+                        _remove_confirmed_draft_from_session(point.get("_draft_id"))
+                        _persist_active_workflow_snapshot(status="drafted")
                         st.rerun()
-            with c2:
-                if st.button("从待保存移除", key=f"remove_confirmed_{point.get('_draft_id')}", use_container_width=True):
-                    _remove_confirmed_draft_from_session(point.get("_draft_id"))
-                    st.rerun()
 
 
 def _render_private_repository(user_id):
@@ -1762,68 +2028,6 @@ def _discard_material_if_unsaved(material_id):
         conn.close()
 
 
-def _cleanup_orphan_material_records(user_id):
-    active_material_id = st.session_state.get("_ocr_material_id") if st.session_state.get("_ocr_preview") is not None else None
-    conn = sqlite3.connect(MEMORY_DB)
-    try:
-        c = conn.cursor()
-        rows = c.execute(
-            """SELECT id, file_path, processing_status, COALESCE(knowledge_count, 0)
-               FROM user_materials
-               WHERE user_id=?
-                 AND COALESCE(knowledge_count, 0)=0
-                 AND NOT EXISTS (
-                     SELECT 1 FROM user_knowledge
-                     WHERE user_knowledge.material_id=user_materials.id
-                 )""",
-            (user_id,),
-        ).fetchall()
-
-        removed = 0
-        for material_id, file_path, processing_status, knowledge_count in rows:
-            if active_material_id and material_id == active_material_id:
-                continue
-            file_missing = bool(file_path) and not Path(file_path).exists()
-            unsaved_pending = (processing_status or "pending") != "done" and knowledge_count == 0
-            if file_missing or unsaved_pending:
-                _remove_local_material_file(file_path)
-                c.execute("DELETE FROM user_materials WHERE id=?", (material_id,))
-                removed += 1
-        if removed:
-            conn.commit()
-    finally:
-        conn.close()
-    _cleanup_unreferenced_upload_files(user_id)
-
-
-def _cleanup_unreferenced_upload_files(user_id):
-    user_dir = Path(f"data/user_materials/{user_id}")
-    if not user_dir.exists():
-        return
-
-    conn = sqlite3.connect(MEMORY_DB)
-    try:
-        referenced = {
-            str(Path(row[0]).resolve())
-            for row in conn.execute(
-                "SELECT file_path FROM user_materials WHERE user_id=? AND file_path IS NOT NULL AND file_path<>''",
-                (user_id,),
-            ).fetchall()
-            if row[0]
-        }
-    finally:
-        conn.close()
-
-    for path in sorted(user_dir.rglob("*"), reverse=True):
-        try:
-            if path.is_file() and str(path.resolve()) not in referenced:
-                path.unlink()
-            elif path.is_dir() and not any(path.iterdir()):
-                path.rmdir()
-        except Exception:
-            continue
-
-
 def _count_effective_materials(c, user_id):
     return c.execute(
         """SELECT COUNT(*)
@@ -1889,6 +2093,8 @@ def _clear_active_material_state(*, discard_unsaved=False):
 
 
 def _set_active_material_state(*, material_id, chapter_name, subject, file_type, filename, material_result):
+    st.session_state.pop("ocr_raw_area_v2", None)
+    st.session_state.pop("ocr_edit_area_v2", None)
     st.session_state["_material_result"] = material_result.to_dict()
     _clear_current_draft_session()
     st.session_state["_ocr_preview"] = material_result.extracted_text
@@ -1914,29 +2120,56 @@ def _process_material_submission(
     clean_chapter_name = (chapter_name or "").strip()
     file_type = _infer_material_file_type(safe_filename)
     file_path = _persist_user_material_file(user_id, safe_filename, file_bytes) if file_bytes else ""
+    subject_profile = get_rag_knowledge_base_by_subject(subject)
+    subject_key = subject_profile.key if subject_profile else ""
+    source_bytes = file_bytes if file_bytes else (pasted_text or "").encode("utf-8")
+    source_hash = hashlib.sha256(source_bytes).hexdigest() if source_bytes else ""
 
     conn = sqlite3.connect(MEMORY_DB)
     try:
-        c = conn.cursor()
-        c.execute(
-            """INSERT INTO user_materials
-               (user_id, subject, filename, chapter_name, file_path, file_type, processing_status)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-            (user_id, subject, safe_filename, clean_chapter_name, file_path, file_type, ),
+        material_record = create_material(
+            conn,
+            user_id=user_id,
+            subject=subject,
+            subject_key=subject_key,
+            filename=safe_filename,
+            chapter_name=clean_chapter_name,
+            file_path=file_path,
+            file_type=file_type,
+            content_hash=source_hash,
+            processing_status="pending",
         )
-        material_id = c.lastrowid
+        material_id = material_record["id"]
         conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        _remove_local_material_file(file_path)
+        st.error(f"无法创建资料记录：{exc}")
+        return {
+            "material_id": None,
+            "chapter_name": clean_chapter_name,
+            "subject": subject,
+            "file_type": file_type,
+            "filename": safe_filename,
+            "error": str(exc),
+        }
     finally:
         conn.close()
 
-    task = create_professional_task(
-        user_id=user_id,
-        subject=subject,
-        chapter_name=clean_chapter_name,
-        filename=safe_filename,
-        material_id=material_id,
-    )
-    st.session_state["_pk_task_id"] = task.task_id
+    try:
+        task = create_professional_task(
+            user_id=user_id,
+            subject=subject,
+            chapter_name=clean_chapter_name,
+            filename=safe_filename,
+            material_id=material_id,
+        )
+    except Exception:
+        task = None
+    if task is not None:
+        st.session_state["_pk_task_id"] = task.task_id
+    else:
+        st.session_state.pop("_pk_task_id", None)
 
     status_label = "正在识别资料..."
     if file_type == "pdf":
@@ -1954,24 +2187,76 @@ def _process_material_submission(
         processing_progress.progress(min(progress_value, 1.0))
         processing_status.update(label=message, state="running")
 
-    with processing_status:
-        material_result = route_material_input(
-            file_name=safe_filename,
-            file_path=file_path,
-            file_bytes=file_bytes,
-            pasted_text=pasted_text,
-            image_ocr_fn=extract_text_from_image,
-            pdf_ocr_fn=lambda path: extract_text_from_pdf_paddleocr(
-                path,
-                progress_callback=update_ocr_progress,
-            ),
-            pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()) if file_type == "pdf" else False,
-        )
+    try:
+        with processing_status:
+            material_result = route_material_input(
+                file_name=safe_filename,
+                file_path=file_path,
+                file_bytes=file_bytes,
+                pasted_text=pasted_text,
+                image_ocr_fn=extract_text_from_image,
+                pdf_ocr_fn=lambda path: extract_text_from_pdf_paddleocr(
+                    path,
+                    progress_callback=update_ocr_progress,
+                ),
+                pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()) if file_type == "pdf" else False,
+            )
+    except Exception as exc:
+        conn = sqlite3.connect(MEMORY_DB)
+        try:
+            mark_material_status(conn, material_id, "failed", error_message=str(exc))
+            conn.commit()
+        finally:
+            conn.close()
+        _update_current_task("failed", note=f"资料识别失败：{exc}")
+        processing_status.update(label="资料识别失败", state="error", expanded=True)
+        st.error(f"资料识别失败：{exc}")
+        return {
+            "material_id": material_id,
+            "chapter_name": clean_chapter_name,
+            "subject": subject,
+            "file_type": file_type,
+            "filename": safe_filename,
+            "task_id": task.task_id if task is not None else "",
+            "error": str(exc),
+        }
 
     if file_type in {"png", "jpg", "jpeg"} and not (is_rapid_ocr_available() or is_paddle_ocr_available()):
         message = "OCR 服务不可用。文字型 PDF 仍可直接提取；扫描型 PDF 或图片可能无法识别。"
         if message not in material_result.warnings:
             material_result.warnings.append(message)
+
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        save_extraction_result(
+            conn,
+            material_id,
+            material_result,
+            status="extracted",
+            content_hash=source_hash,
+        )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        try:
+            mark_material_status(conn, material_id, "failed", error_message=str(exc))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        _update_current_task("failed", note=f"保存资料提取结果失败：{exc}")
+        processing_status.update(label="保存资料状态失败", state="error", expanded=True)
+        st.error(f"资料已经识别，但保存恢复状态失败：{exc}")
+        return {
+            "material_id": material_id,
+            "chapter_name": clean_chapter_name,
+            "subject": subject,
+            "file_type": file_type,
+            "filename": safe_filename,
+            "task_id": task.task_id if task is not None else "",
+            "error": str(exc),
+        }
+    finally:
+        conn.close()
 
     processing_progress.progress(1.0)
     processing_status.update(label="资料识别完成", state="complete", expanded=False)
@@ -2004,6 +2289,7 @@ def _process_material_submission(
         "subject": subject,
         "file_type": file_type,
         "filename": safe_filename,
+        "task_id": task.task_id if task is not None else "",
         "material_result": material_result,
     }
 
@@ -2030,23 +2316,39 @@ def _process_material_batch_uploads(*, user_id, subject, chapter_name, uploaded_
         return
 
     processed = 0
+    failed = 0
     last_result = None
     for index, uploaded_file in enumerate(files, start=1):
         chapter_value = _build_material_batch_chapter_name(chapter_name, uploaded_file.name, multi_file)
-        last_result = _process_material_submission(
+        result = _process_material_submission(
             user_id=user_id,
             subject=subject,
             chapter_name=chapter_value,
             filename=uploaded_file.name,
             file_bytes=uploaded_file.getvalue(),
-            open_preview=index == len(files),
+            open_preview=False,
             rerun_on_complete=False,
         )
+        if result.get("error"):
+            failed += 1
+            continue
         processed += 1
+        last_result = result
 
     if multi_file and processed:
-        _queue_toast(f"已批量导入 {processed} 份资料，当前打开最后一份继续确认。")
+        suffix = f"，{failed} 份失败并已保留错误状态" if failed else ""
+        _queue_toast(f"已批量导入 {processed} 份资料{suffix}，当前打开最后一份继续确认。")
     if last_result:
+        _set_active_material_state(
+            material_id=last_result["material_id"],
+            chapter_name=last_result["chapter_name"],
+            subject=last_result["subject"],
+            file_type=last_result["file_type"],
+            filename=last_result["filename"],
+            material_result=last_result["material_result"],
+        )
+        if last_result.get("task_id"):
+            st.session_state["_pk_task_id"] = last_result["task_id"]
         st.rerun()
 
 
@@ -2081,16 +2383,19 @@ def _render_rag_knowledge_base_catalog():
     for item in items:
         status_class = "kb-card-status active" if item.enabled else "kb-card-status"
         card_class = "kb-catalog-card active" if item.enabled else "kb-catalog-card"
-        tags = "".join(f'<span class="kb-card-tag">{tag}</span>' for tag in item.capabilities[:3])
+        tags = "".join(
+            f'<span class="kb-card-tag">{_escape_html(tag)}</span>'
+            for tag in item.capabilities[:3]
+        )
         card_html.append(
             (
                 f'<div class="{card_class}">'
                 f'<div class="kb-card-top">'
-                f'<div class="kb-card-title">{item.title}</div>'
-                f'<div class="{status_class}">{item.status}</div>'
+                f'<div class="kb-card-title">{_escape_html(item.title)}</div>'
+                f'<div class="{status_class}">{_escape_html(item.status)}</div>'
                 f"</div>"
-                f'<div class="kb-card-stage">{item.stage} · {item.subject_label}</div>'
-                f'<div class="kb-card-summary">{item.summary}</div>'
+                f'<div class="kb-card-stage">{_escape_html(item.stage)} · {_escape_html(item.subject_label)}</div>'
+                f'<div class="kb-card-summary">{_escape_html(item.summary)}</div>'
                 f'<div class="kb-card-tags">{tags}</div>'
                 f"</div>"
             )
@@ -2110,6 +2415,84 @@ def _render_rag_knowledge_base_catalog():
     )
 
 
+def _render_subject_setup_wizard():
+    with st.expander("＋ 新建一门专业课知识库", expanded=False):
+        st.caption("只填专业课名称就能使用；考试代码、资料文件夹和抽取重点都可以留空，之后再补。")
+        with st.form("create_custom_subject_v1"):
+            subject_label = st.text_input("专业课名称 *", placeholder="例如：管理学原理")
+            exam_code = st.text_input("考试代码（可选）", placeholder="例如：803")
+            local_root = st.text_input(
+                "本地资料文件夹（可选）",
+                placeholder=r"例如：D:\考研资料\803管理学",
+            )
+            extraction_guidance = st.text_area(
+                "希望系统重点识别什么（可选）",
+                placeholder="例如：优先识别理论流派、代表人物、核心观点、适用条件和易混点。",
+                height=90,
+            )
+            submitted = st.form_submit_button("创建并开始导入资料", use_container_width=True, type="primary")
+
+        if not submitted:
+            return
+        clean_label = subject_label.strip()
+        if not clean_label:
+            st.warning("请先填写专业课名称。")
+            return
+        existing_profile = get_rag_knowledge_base_by_subject(clean_label)
+        if existing_profile is not None:
+            st.session_state["_pending_kb_subject"] = clean_label
+            _queue_toast(f"“{clean_label}”已经存在，已为你选中")
+            st.rerun()
+
+        resolved_root = ""
+        if local_root.strip():
+            candidate = Path(local_root.strip()).expanduser()
+            if not candidate.exists() or not candidate.is_dir():
+                st.warning("本地资料文件夹不存在，请检查路径；也可以先留空，创建后直接上传资料。")
+                return
+            resolved_root = str(candidate.resolve())
+
+        profile_key = f"custom_{uuid4().hex[:10]}"
+        clean_code = exam_code.strip()
+        title = f"{clean_code} {clean_label}".strip()
+        local_source = None
+        if resolved_root:
+            local_source = {
+                "key": profile_key,
+                "title": f"本地{clean_label}资料",
+                "tab_label": "本地资料库",
+                "root_env_var": f"{profile_key.upper()}_ROOT",
+                "fallback_dir_name": resolved_root,
+            }
+        try:
+            save_custom_subject_profile(
+                {
+                    "key": profile_key,
+                    "catalog": {
+                        "title": title,
+                        "subject_label": clean_label,
+                        "status": "已启用",
+                        "stage": "自定义",
+                        "summary": f"{clean_label}的资料识别、人工确认与私有知识库工作流。",
+                        "capabilities": ["资料导入", "知识点确认", "原文引用"],
+                        "source_strategy": "统一资料路由 + 结构化知识点确认",
+                        "notes": "由页面向导创建，可继续通过配置文件调整抽取重点。",
+                        "enabled": True,
+                    },
+                    "local_source": local_source,
+                    "max_points": 12,
+                    "extraction_guidance": extraction_guidance.strip(),
+                }
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            st.error(f"创建专业课失败：{exc}")
+            return
+
+        st.session_state["_pending_kb_subject"] = clean_label
+        _queue_toast(f"已创建“{clean_label}”，现在可以导入资料")
+        st.rerun()
+
+
 def _update_knowledge_mastery(knowledge_id, mastery_state):
     if not knowledge_id:
         return
@@ -2127,7 +2510,6 @@ def render_knowledge_page():
     user_id = st.session_state.get("user_id", 1)
     _ensure_session_draft_state()
     _ensure_persist_state()
-    _cleanup_orphan_material_records(user_id)
     _show_pending_toast()
 
     st.markdown(
@@ -2139,7 +2521,8 @@ def render_knowledge_page():
         """,
         unsafe_allow_html=True,
     )
-    _render_rag_knowledge_base_catalog()
+    with st.expander("已配置的专业课（管理与扩展）", expanded=False):
+        _render_rag_knowledge_base_catalog()
 
     conn = sqlite3.connect(MEMORY_DB)
     try:
@@ -2158,11 +2541,18 @@ def render_knowledge_page():
     m4.metric("学科", total_subjects)
     m5.metric("待确认", len(st.session_state.get("knowledge_drafts") or []))
 
-    tab_input, tab_confirm, tab_repo, tab_wrong = st.tabs(["1 识别资料", "2 确认入库", "3 我的知识库", "4 错题本"])
+    tab_input, tab_confirm, tab_repo, tab_wrong = st.tabs(
+        ["1 导入并核对文本", "2 确认知识点", "3 我的知识库", "工具 · 错题本"]
+    )
     subjects_kb = list_enabled_subjects()
 
     with tab_input:
         _render_stage_strip("1")
+        _render_resume_material_panel(user_id)
+        _render_subject_setup_wizard()
+        pending_subject = st.session_state.pop("_pending_kb_subject", None)
+        if pending_subject in subjects_kb:
+            st.session_state["kb_subject_v2"] = pending_subject
         selected_subject = st.selectbox("学科", subjects_kb, key="kb_subject_v2")
         local_material_source = get_local_material_source_for_subject(selected_subject)
         local_tab_label = local_material_source.tab_label if local_material_source else "本地资料源"
@@ -2316,19 +2706,27 @@ def render_knowledge_page():
                 with clean_col:
                     edited_text = st.text_area("清洗后 / 可继续修正", value=ocr_text, height=330, key="ocr_edit_area_v2")
 
-                c1, c2 = st.columns([3, 1])
+                c1, c2, c3 = st.columns([2.2, 1.25, 1])
                 with c1:
-                    if st.button("抽取候选知识点", use_container_width=True, type="primary"):
+                    if st.button("文本已核对，生成候选知识点", use_container_width=True, type="primary"):
                         if not edited_text.strip():
                             st.warning("识别文本为空。")
                         else:
+                            if not _persist_active_confirmed_text(edited_text, status="text_confirmed"):
+                                st.stop()
+                            active_subject = st.session_state.get("_ocr_subject", "")
+                            subject_profile = get_rag_knowledge_base_by_subject(active_subject)
                             drafts, draft_warnings = _extract_drafts_with_progress(
                                 text=edited_text,
-                                subject=st.session_state.get("_ocr_subject", ""),
+                                subject=active_subject,
                                 chapter_name=st.session_state.get("_ocr_chapter", ""),
-                                max_points=12,
+                                max_points=subject_profile.max_points if subject_profile else 12,
+                                extraction_guidance=(
+                                    subject_profile.extraction_guidance if subject_profile else ""
+                                ),
                             )
                             _set_draft_session_data([knowledge_point_to_dict(point) for point in drafts], draft_warnings)
+                            _persist_active_workflow_snapshot(status="drafted")
                             _update_current_task(
                                 "drafted",
                                 note=f"已生成 {len(drafts)} 条候选知识点",
@@ -2337,6 +2735,17 @@ def render_knowledge_page():
                             _queue_toast(f"已生成 {len(drafts)} 条候选知识点")
                             st.rerun()
                 with c2:
+                    if st.button("保存文本，稍后继续", use_container_width=True):
+                        if not edited_text.strip():
+                            st.warning("识别文本为空。")
+                        else:
+                            if not _persist_active_confirmed_text(edited_text, status="text_confirmed"):
+                                st.stop()
+                            st.session_state["_ocr_preview"] = edited_text
+                            st.session_state["_material_result"]["extracted_text"] = edited_text
+                            _queue_toast("已保存当前文本，可稍后从未完成资料继续")
+                            st.rerun()
+                with c3:
                     if st.button("重新上传", use_container_width=True):
                         _clear_active_material_state(discard_unsaved=True)
                         _clear_current_draft_session()
@@ -2386,10 +2795,12 @@ def render_knowledge_page():
                 with b1:
                     if st.button("确认全部", use_container_width=True):
                         _confirm_all_drafts_in_session()
+                        _persist_active_workflow_snapshot(status="drafted")
                         st.rerun()
                 with b2:
                     if st.button("清空本次草稿", use_container_width=True):
                         _clear_current_draft_session()
+                        _persist_active_workflow_snapshot(status="text_confirmed")
                         st.rerun()
             with editor_col:
                 selected_point = point_map.get(st.session_state.get("selected_draft_id"))

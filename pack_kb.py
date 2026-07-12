@@ -1,5 +1,7 @@
-"""专业知识库独立包打包脚本"""
-import zipfile, os, shutil
+"""Build a runnable standalone package for the professional knowledge workflow."""
+
+import shutil
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -23,12 +25,13 @@ PACK_DIR.mkdir(parents=True, exist_ok=True)
 (PACK_DIR / "data").mkdir(exist_ok=True)
 
 # 核心文件
-print("[1/3] Copying core files...")
+print("[1/4] Copying core files...")
 core_files = {
     "app_kb.py": "app.py",           # 入口重命名
     "knowledge_base.py": "knowledge_base.py",
     "requirements_kb.txt": "requirements.txt",
     "SETUP_kb.md": "SETUP.md",
+    ".env.example": ".env.example",
 }
 for src_name, dst_name in core_files.items():
     src = ROOT / src_name
@@ -36,17 +39,35 @@ for src_name, dst_name in core_files.items():
         shutil.copy2(src, PACK_DIR / dst_name)
         print(f"    {src_name} -> {dst_name}")
 
-# 需求文档
-print("[2/3] Copying docs...")
+# 运行模块。旧脚本只复制 knowledge_base.py，会遗漏它依赖的包。
+print("[2/4] Copying workflow modules...")
+for module_name in ("professional_knowledge", "repositories", "schemas", "services"):
+    source_dir = ROOT / module_name
+    target_dir = PACK_DIR / module_name
+    shutil.copytree(
+        source_dir,
+        target_dir,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
+    print(f"    {module_name}/")
+
+# 使用文档
+print("[3/4] Copying docs...")
 docs_dir = PACK_DIR / "docs"
 docs_dir.mkdir(exist_ok=True)
-doc_src = ROOT / "docs" / "knowledge-base-outsourcing.md"
-if doc_src.exists():
-    shutil.copy2(doc_src, docs_dir / "knowledge-base-outsourcing.md")
-    print(f"    knowledge-base-outsourcing.md")
+for doc_name in (
+    "knowledge-base-outsourcing.md",
+    "professional_knowledge_quick_workflow.md",
+    "professional_knowledge_integration.md",
+):
+    doc_src = ROOT / "docs" / doc_name
+    if doc_src.exists():
+        shutil.copy2(doc_src, docs_dir / doc_name)
+        print(f"    {doc_name}")
 
 # 打 ZIP
-print("[3/3] Creating ZIP...")
+print("[4/4] Creating ZIP...")
 with zipfile.ZipFile(ZIP_FILE, 'w', zipfile.ZIP_DEFLATED) as zf:
     for f in PACK_DIR.rglob("*"):
         if f.is_file():

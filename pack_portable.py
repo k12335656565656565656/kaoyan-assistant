@@ -31,6 +31,7 @@ EXCLUDED_NAMES = {
 EXCLUDED_FILES = {
     "CLAUDE.md",
     "AGENTS.md",
+    "custom_subjects.json",
     "streamlit-kb-test.out.log",
     "streamlit-kb-test.err.log",
 }

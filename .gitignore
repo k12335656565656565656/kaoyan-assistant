@@ -6,6 +6,7 @@ data/*.db
 agent_experience_*.md
 data/user_materials/
 data/tasks/
+data/config/custom_subjects.json
 data/test_materials/
 *.sqlite
 *.sqlite3
@@ -48,6 +49,9 @@ venv/
 test_*.py
 !tests/test_local_material_source_service.py
 !tests/test_material_pipeline.py
+!tests/test_material_repo.py
+!tests/test_professional_knowledge_ui_flow.py
+!tests/test_repository_flow.py
 temp/
 benchmark_report_*.txt
 benchmarks/acceptance_*.json

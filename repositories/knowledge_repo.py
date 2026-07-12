@@ -1,7 +1,11 @@
+import hashlib
 import json
+import sqlite3
+import unicodedata
 from datetime import datetime
+from typing import Any
 
-from schemas.knowledge_schema import knowledge_point_to_dict
+from schemas.knowledge_schema import knowledge_point_to_dict, validate_required_fields
 
 
 STRUCTURED_COLUMNS = {
@@ -24,6 +28,8 @@ STRUCTURED_COLUMNS = {
     "source_type": "TEXT",
     "process_method": "TEXT",
     "material_filename": "TEXT",
+    "subject_key": "TEXT",
+    "ingest_key": "TEXT",
     "status": "TEXT",
     "review_content": "TEXT",
     "review_generated_at": "TEXT",
@@ -57,6 +63,29 @@ def ensure_knowledge_schema(conn):
         )"""
     )
     ensure_user_knowledge_structured_columns(conn)
+    try:
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS ux_user_knowledge_user_ingest_key
+               ON user_knowledge(user_id, ingest_key)"""
+        )
+    except sqlite3.IntegrityError:
+        # A partially migrated database may already contain repeated non-null keys.
+        # Keep every knowledge row and clear only the conflicting derived keys.
+        conn.execute(
+            """UPDATE user_knowledge
+               SET ingest_key=NULL
+               WHERE ingest_key IS NOT NULL
+                 AND rowid NOT IN (
+                     SELECT MIN(rowid)
+                     FROM user_knowledge
+                     WHERE ingest_key IS NOT NULL
+                     GROUP BY user_id, ingest_key
+                 )"""
+        )
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS ux_user_knowledge_user_ingest_key
+               ON user_knowledge(user_id, ingest_key)"""
+        )
 
 
 def _table_exists(conn, table_name):
@@ -93,34 +122,172 @@ def _build_legacy_content(point_dict):
     return "\n".join(lines)
 
 
-def save_confirmed_knowledge_points(conn, user_id, points, material_meta=None) -> int:
+def _normalize_ingest_value(value: Any):
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_ingest_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple, set)):
+        normalized_items = [_normalize_ingest_value(item) for item in value]
+        return sorted(
+            normalized_items,
+            key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True),
+        )
+    if isinstance(value, str):
+        return " ".join(unicodedata.normalize("NFKC", value).split())
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return " ".join(unicodedata.normalize("NFKC", str(value)).split())
+
+
+def _build_ingest_key(material_meta: dict, point_dict: dict) -> str:
+    material_id = material_meta.get("material_id")
+    if material_id is not None and str(material_id).strip():
+        material_scope = {"material_id": str(material_id).strip()}
+    else:
+        material_scope = {
+            "subject_key": material_meta.get("subject_key", ""),
+            "subject": material_meta.get("subject", ""),
+            "chapter_name": material_meta.get("chapter_name", ""),
+            "material_filename": material_meta.get("material_filename", ""),
+            "content_hash": material_meta.get("content_hash", ""),
+        }
+    payload = {
+        "material_scope": _normalize_ingest_value(material_scope),
+        "knowledge_point": _normalize_ingest_value(point_dict),
+    }
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _point_subject_key(point: Any) -> str:
+    if isinstance(point, dict):
+        return str(point.get("subject_key") or "").strip()
+    return str(getattr(point, "subject_key", "") or "").strip()
+
+
+def _sync_material_knowledge_count(
+    conn,
+    user_id: int,
+    material_id: int,
+    *,
+    finalize_material: bool,
+) -> None:
+    if not _table_exists(conn, "user_materials"):
+        return
+    material_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(user_materials)").fetchall()
+    }
+    if not {"id", "knowledge_count", "processing_status"}.issubset(
+        material_columns
+    ):
+        return
+
+    knowledge_count = conn.execute(
+        """SELECT COUNT(*) FROM user_knowledge
+           WHERE user_id=? AND material_id=?""",
+        (user_id, material_id),
+    ).fetchone()[0]
+    if "user_id" in material_columns:
+        if finalize_material:
+            conn.execute(
+                """UPDATE user_materials
+                   SET processing_status='done', knowledge_count=?
+                   WHERE id=? AND user_id=?""",
+                (knowledge_count, material_id, user_id),
+            )
+        else:
+            conn.execute(
+                """UPDATE user_materials
+                   SET knowledge_count=?
+                   WHERE id=? AND user_id=?""",
+                (knowledge_count, material_id, user_id),
+            )
+    else:
+        if finalize_material:
+            conn.execute(
+                """UPDATE user_materials
+                   SET processing_status='done', knowledge_count=?
+                   WHERE id=?""",
+                (knowledge_count, material_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE user_materials SET knowledge_count=? WHERE id=?",
+                (knowledge_count, material_id),
+            )
+
+
+def save_confirmed_knowledge_points(
+    conn,
+    user_id,
+    points,
+    material_meta=None,
+    *,
+    strict=False,
+    finalize_material=True,
+) -> int:
     ensure_knowledge_schema(conn)
     material_meta = material_meta or {}
+    points = list(points or [])
+    if strict:
+        invalid = []
+        for index, point in enumerate(points, start=1):
+            warnings = validate_required_fields(point)
+            if warnings:
+                invalid.append((index, warnings))
+        if invalid:
+            details = "；".join(
+                f"第{index}条：{','.join(warnings)}"
+                for index, warnings in invalid[:5]
+            )
+            raise ValueError(f"存在不完整的确认知识点，已拒绝入库：{details}")
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c = conn.cursor()
     saved_count = 0
 
     for point in points or []:
         point_dict = knowledge_point_to_dict(point)
+        subject = point_dict.get("subject") or material_meta.get("subject", "")
+        chapter_name = point_dict.get("chapter_name") or material_meta.get(
+            "chapter_name", ""
+        )
+        subject_key = _point_subject_key(point) or material_meta.get(
+            "subject_key", ""
+        )
+        normalized_point = dict(point_dict)
+        normalized_point["subject"] = subject
+        normalized_point["chapter_name"] = chapter_name
+        normalized_point["subject_key"] = subject_key
+        ingest_key = _build_ingest_key(material_meta, normalized_point)
         content = _build_legacy_content(point_dict)
         raw_json = json.dumps(point_dict, ensure_ascii=False)
 
         c.execute(
-            """INSERT INTO user_knowledge (
-                user_id, material_id, subject, chapter_name, knowledge_name, content,
+            """INSERT OR IGNORE INTO user_knowledge (
+                user_id, material_id, subject, subject_key, chapter_name,
+                knowledge_name, content, ingest_key,
                 knowledge_type, core_definition, exam_question_styles_json, keywords_json,
                 related_concepts_json, pitfalls_json, example_or_application, review_priority,
                 source_text, source_page, source_location, tags_json, mastery_state,
                 is_ai_expansion, uncertainty_note, raw_json, source_type, process_method,
                 material_filename, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 user_id,
                 material_meta.get("material_id"),
-                point_dict.get("subject") or material_meta.get("subject", ""),
-                point_dict.get("chapter_name") or material_meta.get("chapter_name", ""),
+                subject,
+                subject_key,
+                chapter_name,
                 point_dict.get("knowledge_name", ""),
                 content,
+                ingest_key,
                 point_dict.get("knowledge_type", ""),
                 point_dict.get("core_definition", ""),
                 _list_json(point_dict.get("exam_question_styles")),
@@ -145,16 +312,16 @@ def save_confirmed_knowledge_points(conn, user_id, points, material_meta=None) -
                 now_str,
             ),
         )
-        saved_count += 1
+        if c.rowcount > 0:
+            saved_count += 1
 
     material_id = material_meta.get("material_id")
-    if saved_count and material_id and _table_exists(conn, "user_materials"):
-        c.execute(
-            """UPDATE user_materials
-               SET processing_status='done',
-                   knowledge_count=COALESCE(knowledge_count, 0) + ?
-               WHERE id=?""",
-            (saved_count, material_id),
+    if points and material_id is not None:
+        _sync_material_knowledge_count(
+            conn,
+            user_id,
+            material_id,
+            finalize_material=bool(finalize_material),
         )
 
     return saved_count

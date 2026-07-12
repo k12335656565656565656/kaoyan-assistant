@@ -15,6 +15,10 @@
 → 后续解释、考法、复习卡片、追问和 AI 发散
 ```
 
+当前资料、人工确认文本和草稿队列会同步保存到 SQLite。页面刷新或进程重启后，可从“继续上次未完成的资料”恢复；知识点保存使用数据库去重键，可安全重试。
+
+新增专业课优先使用页面中的“＋ 新建一门专业课知识库”向导。内置配置位于 `professional_knowledge/default_subjects.json`，向导创建的个人配置位于 `data/config/custom_subjects.json`，不需要再同时修改 catalog 和本地资料源代码。
+
 ## 本地入口
 
 独立运行：
@@ -69,8 +73,8 @@ requirements_kb.txt
 ```env
 AI_API_KEY=your-api-key
 AI_API_BASE=https://api.xiaomimimo.com/v1
-UMI_OCR_URL=http://localhost:1224
 MEMORY_DB=data/memory.db
+PADDLE_OCR_LANG=ch
 ```
 
 如果 `AI_API_KEY` 不可用，系统仍可使用本地规则兜底生成候选草稿，但质量低于 LLM 抽取，需要用户人工核对。

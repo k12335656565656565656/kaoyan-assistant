@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from professional_knowledge.catalog import list_default_subject_profiles, list_subject_profiles
+
 
 SUPPORTED_SUFFIXES = {".pdf", ".txt", ".md", ".png", ".jpg", ".jpeg"}
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -19,39 +21,56 @@ class LocalMaterialSourceProfile:
     fallback_dir_name: str | None = None
 
 
-LOCAL_MATERIAL_SOURCE_PROFILES: tuple[LocalMaterialSourceProfile, ...] = (
-    LocalMaterialSourceProfile(
-        key="exam_408",
-        subject_label="408综合",
-        title="本地 408 资料",
-        tab_label="本地 408 资料",
-        root_env_var="CSKAOYAN_ROOT",
-        fallback_dir_name="cskaoyan-master",
-    ),
-    LocalMaterialSourceProfile(
-        key="medical_postgraduate",
-        subject_label="医学考研",
-        title="本地医学考研资料",
-        tab_label="本地医学考研资料",
-        root_env_var="MEDICAL_POSTGRADUATE_ROOT",
-        fallback_dir_name="Medical Postgraduate Entrance Examination",
-    ),
+def _build_local_material_source_profiles(
+    subject_profiles: list[dict],
+) -> list[LocalMaterialSourceProfile]:
+    profiles: list[LocalMaterialSourceProfile] = []
+    for subject_profile in subject_profiles:
+        local_source = subject_profile.get("local_source")
+        catalog = subject_profile.get("catalog")
+        if not isinstance(local_source, dict) or not isinstance(catalog, dict):
+            continue
+        profiles.append(
+            LocalMaterialSourceProfile(
+                key=local_source["key"],
+                subject_label=catalog["subject_label"],
+                title=local_source["title"],
+                tab_label=local_source["tab_label"],
+                root_env_var=local_source["root_env_var"],
+                fallback_dir_name=local_source.get("fallback_dir_name"),
+            )
+        )
+    return profiles
+
+
+# Retained for callers that imported the old constant. Runtime list/get APIs
+# below also include valid custom subject configuration.
+LOCAL_MATERIAL_SOURCE_PROFILES: tuple[LocalMaterialSourceProfile, ...] = tuple(
+    _build_local_material_source_profiles(list_default_subject_profiles())
 )
 
 
-def list_local_material_source_profiles() -> list[LocalMaterialSourceProfile]:
-    return list(LOCAL_MATERIAL_SOURCE_PROFILES)
+def list_local_material_source_profiles(
+    custom_config_path: str | Path | None = None,
+) -> list[LocalMaterialSourceProfile]:
+    return _build_local_material_source_profiles(
+        list_subject_profiles(custom_config_path=custom_config_path)
+    )
 
 
-def get_local_material_source_profile(source_key: str) -> LocalMaterialSourceProfile | None:
-    for profile in LOCAL_MATERIAL_SOURCE_PROFILES:
+def get_local_material_source_profile(
+    source_key: str, custom_config_path: str | Path | None = None
+) -> LocalMaterialSourceProfile | None:
+    for profile in list_local_material_source_profiles(custom_config_path=custom_config_path):
         if profile.key == source_key:
             return profile
     return None
 
 
-def get_local_material_source_for_subject(subject_label: str) -> LocalMaterialSourceProfile | None:
-    for profile in LOCAL_MATERIAL_SOURCE_PROFILES:
+def get_local_material_source_for_subject(
+    subject_label: str, custom_config_path: str | Path | None = None
+) -> LocalMaterialSourceProfile | None:
+    for profile in list_local_material_source_profiles(custom_config_path=custom_config_path):
         if profile.subject_label == (subject_label or "").strip():
             return profile
     return None
@@ -66,8 +85,12 @@ def _resolve_candidate_root(raw: str) -> Path | None:
     return root.resolve()
 
 
-def get_local_material_root(source_key: str) -> Path | None:
-    profile = get_local_material_source_profile(source_key)
+def get_local_material_root(
+    source_key: str, custom_config_path: str | Path | None = None
+) -> Path | None:
+    profile = get_local_material_source_profile(
+        source_key, custom_config_path=custom_config_path
+    )
     if profile is None:
         return None
 
@@ -82,8 +105,12 @@ def get_local_material_root(source_key: str) -> Path | None:
     return None
 
 
-def get_local_material_source_hint(source_key: str) -> str:
-    profile = get_local_material_source_profile(source_key)
+def get_local_material_source_hint(
+    source_key: str, custom_config_path: str | Path | None = None
+) -> str:
+    profile = get_local_material_source_profile(
+        source_key, custom_config_path=custom_config_path
+    )
     if profile is None:
         return ""
 
@@ -101,8 +128,12 @@ def _is_inside(child: Path, parent: Path) -> bool:
         return False
 
 
-def list_local_material_files(source_key: str, limit: int = 300) -> list[dict]:
-    root = get_local_material_root(source_key)
+def list_local_material_files(
+    source_key: str,
+    limit: int = 300,
+    custom_config_path: str | Path | None = None,
+) -> list[dict]:
+    root = get_local_material_root(source_key, custom_config_path=custom_config_path)
     if root is None:
         return []
 
@@ -133,9 +164,15 @@ def list_local_material_files(source_key: str, limit: int = 300) -> list[dict]:
     return items[:limit]
 
 
-def read_local_material(source_key: str, relative_path: str) -> tuple[str, bytes]:
-    profile = get_local_material_source_profile(source_key)
-    root = get_local_material_root(source_key)
+def read_local_material(
+    source_key: str,
+    relative_path: str,
+    custom_config_path: str | Path | None = None,
+) -> tuple[str, bytes]:
+    profile = get_local_material_source_profile(
+        source_key, custom_config_path=custom_config_path
+    )
+    root = get_local_material_root(source_key, custom_config_path=custom_config_path)
     if profile is None or root is None:
         raise RuntimeError("本地资料目录未配置或不可用。")
 

@@ -11,7 +11,19 @@ from schemas.knowledge_schema import (
 )
 
 
-def build_knowledge_json_prompt(text: str, subject: str = "", chapter_name: str = "", max_points: int = 12) -> str:
+def build_knowledge_json_prompt(
+    text: str,
+    subject: str = "",
+    chapter_name: str = "",
+    max_points: int = 12,
+    extraction_guidance: str = "",
+) -> str:
+    guidance = (extraction_guidance or "").strip()
+    guidance_block = (
+        f"\n学科补充抽取规则（只用于强调重点，不能突破原文依据）：\n{guidance}\n"
+        if guidance
+        else ""
+    )
     return f"""你是专业课知识点抽取助手。请只基于用户提供的资料内容提取知识点，不要编造资料中没有的事实。
 
 任务要求：
@@ -52,6 +64,7 @@ def build_knowledge_json_prompt(text: str, subject: str = "", chapter_name: str 
 
 学科：{subject}
 章节：{chapter_name}
+{guidance_block}
 
 资料原文：
 {text}"""
@@ -321,6 +334,25 @@ def _split_text_for_llm(text: str, target_chars: int = 2400, hard_limit: int = 3
     return merged or [cleaned[:hard_limit]]
 
 
+def _select_chunks_for_point_budget(chunks: list[str], max_points: int) -> list[tuple[int, str]]:
+    """Select source chunks evenly when the point budget cannot cover every chunk."""
+    if not chunks or max_points <= 0:
+        return []
+
+    selection_count = min(len(chunks), max_points)
+    if selection_count == len(chunks):
+        return list(enumerate(chunks, start=1))
+    if selection_count == 1:
+        return [(1, chunks[0])]
+
+    last_index = len(chunks) - 1
+    selected_indexes = [
+        round(position * last_index / (selection_count - 1))
+        for position in range(selection_count)
+    ]
+    return [(index + 1, chunks[index]) for index in selected_indexes]
+
+
 def _split_page_section(page: str, section: str, hard_limit: int) -> list[str]:
     section = (section or "").strip()
     if not section:
@@ -507,6 +539,7 @@ def extract_knowledge_points_as_drafts(
     max_points: int = 12,
     llm_callable=None,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    extraction_guidance: str = "",
 ):
     warnings = []
     if llm_callable is None:
@@ -518,35 +551,62 @@ def extract_knowledge_points_as_drafts(
 
     _emit_progress(progress_callback, 0, 1, "正在整理待抽取文本...")
     chunks = _split_text_for_llm(safe_text)
-    if len(chunks) > 1:
+    selected_chunks = _select_chunks_for_point_budget(chunks, max_points)
+    sampled_chunks = len(selected_chunks) < len(chunks)
+    if sampled_chunks:
+        skipped_count = len(chunks) - len(selected_chunks)
+        selected_positions = "、".join(str(source_index) for source_index, _chunk in selected_chunks)
+        if len(selected_chunks) >= 3:
+            coverage_description = "覆盖首段、中段和末段"
+        elif len(selected_chunks) == 2:
+            coverage_description = "覆盖首段和末段"
+        else:
+            coverage_description = "仅覆盖首段"
+        warnings.append(
+            f"资料较长，共切分为 {len(chunks)} 个片段；受最多 {max_points} 条知识点限制，"
+            f"本次按全篇位置均匀选取 {len(selected_chunks)} 个片段抽取（原文第 {selected_positions} 段），"
+            f"{coverage_description}。"
+            f"其余 {skipped_count} 个片段本次未逐段调用模型。"
+        )
+    elif len(chunks) > 1:
         warnings.append(f"资料较长，已按 {len(chunks)} 个片段分段抽取，避免后页内容被截断。")
 
-    total_steps = max(3, len(chunks) * 3 + 2)
+    total_steps = max(3, len(selected_chunks) * 3 + 2)
     current_step = 1
-    chunk_message = f"已整理为 {len(chunks)} 个抽取片段" if len(chunks) > 1 else "已整理抽取文本，准备开始归纳"
+    if sampled_chunks:
+        chunk_message = f"已从全篇 {len(chunks)} 个片段中均匀选取 {len(selected_chunks)} 个抽取片段"
+    else:
+        chunk_message = f"已整理为 {len(chunks)} 个抽取片段" if len(chunks) > 1 else "已整理抽取文本，准备开始归纳"
     _emit_progress(progress_callback, current_step, total_steps, chunk_message)
 
     all_drafts = []
     used_fallback = False
-    for index, chunk in enumerate(chunks, start=1):
+    for index, (source_chunk_index, chunk) in enumerate(selected_chunks, start=1):
         if len(all_drafts) >= max_points:
             break
 
         remaining = max_points - len(all_drafts)
-        chunks_left = len(chunks) - index + 1
-        chunk_points = max(2, math.ceil(remaining / max(chunks_left, 1)))
+        chunks_left = len(selected_chunks) - index + 1
+        chunk_points = max(1, math.ceil(remaining / max(chunks_left, 1)))
+        chunk_label = (
+            f"选中片段 {index}/{len(selected_chunks)}（原文第 {source_chunk_index}/{len(chunks)} 段）"
+            if sampled_chunks
+            else f"第 {index}/{len(selected_chunks)} 段"
+        )
+        warning_label = f"原文第 {source_chunk_index} 段" if sampled_chunks else f"第 {index} 段"
         current_step += 1
         _emit_progress(
             progress_callback,
             current_step,
             total_steps,
-            f"正在准备第 {index}/{len(chunks)} 段，目标抽取 {min(chunk_points, remaining)} 条候选知识点",
+            f"正在准备{chunk_label}，目标抽取 {min(chunk_points, remaining)} 条候选知识点",
         )
         prompt = build_knowledge_json_prompt(
             chunk,
             subject=subject,
             chapter_name=chapter_name,
             max_points=min(chunk_points, remaining),
+            extraction_guidance=extraction_guidance,
         )
 
         try:
@@ -555,11 +615,11 @@ def extract_knowledge_points_as_drafts(
                 progress_callback,
                 current_step,
                 total_steps,
-                f"正在抽取第 {index}/{len(chunks)} 段候选知识点...",
+                f"正在抽取{chunk_label}候选知识点...",
             )
             raw_output = llm_callable(prompt)
         except Exception as exc:
-            warnings.append(f"第 {index} 段调用模型失败：{exc}")
+            warnings.append(f"{warning_label}调用模型失败：{exc}")
             fallback_drafts = _build_fallback_drafts(
                 chunk,
                 subject=subject,
@@ -574,12 +634,12 @@ def extract_knowledge_points_as_drafts(
                 progress_callback,
                 current_step,
                 total_steps,
-                f"第 {index}/{len(chunks)} 段模型失败，已切换本地兜底并生成 {fallback_count} 条草稿",
+                f"{chunk_label}模型失败，已切换本地兜底并生成 {fallback_count} 条草稿",
             )
             continue
 
         drafts, parse_warnings = parse_knowledge_points_json(raw_output, max_points=min(chunk_points, remaining))
-        warnings.extend([f"第 {index} 段：{warning}" for warning in parse_warnings])
+        warnings.extend([f"{warning_label}：{warning}" for warning in parse_warnings])
 
         if not drafts:
             fallback_drafts = _build_fallback_drafts(
@@ -589,7 +649,7 @@ def extract_knowledge_points_as_drafts(
                 max_points=min(chunk_points, remaining),
             )
             if fallback_drafts:
-                warnings.append(f"第 {index} 段模型输出无法解析，已启用本地兜底抽取。")
+                warnings.append(f"{warning_label}模型输出无法解析，已启用本地兜底抽取。")
                 used_fallback = True
             all_drafts.extend(fallback_drafts)
             current_step += 1
@@ -597,7 +657,7 @@ def extract_knowledge_points_as_drafts(
                 progress_callback,
                 current_step,
                 total_steps,
-                f"第 {index}/{len(chunks)} 段已用本地规则补齐，当前累计 {len(all_drafts)} 条草稿",
+                f"{chunk_label}已用本地规则补齐，当前累计 {len(all_drafts)} 条草稿",
             )
             continue
 
@@ -607,7 +667,7 @@ def extract_knowledge_points_as_drafts(
             progress_callback,
             current_step,
             total_steps,
-            f"第 {index}/{len(chunks)} 段完成，当前累计 {len(all_drafts)} 条候选知识点",
+            f"{chunk_label}完成，当前累计 {len(all_drafts)} 条候选知识点",
         )
 
     current_step += 1

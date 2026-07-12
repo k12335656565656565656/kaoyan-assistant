@@ -8,13 +8,54 @@ WORKSPACE_DIR = PROJECT_DIR.parent
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from services.knowledge_json_extractor import extract_knowledge_points_as_drafts
+from services.knowledge_json_extractor import build_knowledge_json_prompt, extract_knowledge_points_as_drafts
 from services.material_cleaner import clean_material_for_extraction
 from services.material_router import route_material_input
 from services.pdf_text_service import extract_pdf_text
+from schemas.material_schema import MaterialResult
 
 
 class MaterialPipelineTests(unittest.TestCase):
+    def test_material_result_can_restore_older_persisted_payload(self):
+        result = MaterialResult.from_dict(
+            {
+                "source_type": "pdf",
+                "process_method": "pdf_text_extract",
+                "extracted_text": "已确认的资料文本",
+                "confidence": 0.92,
+                "future_field": "ignored",
+            }
+        )
+        self.assertEqual(result.source_type, "pdf")
+        self.assertEqual(result.extracted_text, "已确认的资料文本")
+        self.assertEqual(result.warnings, [])
+
+        damaged = MaterialResult.from_dict(
+            {
+                "source_type": "unknown",
+                "process_method": None,
+                "extracted_text": 123,
+                "confidence": "not-a-number",
+                "warnings": "旧版警告",
+                "clean_report": [],
+            }
+        )
+        self.assertEqual(damaged.source_type, "pasted_text")
+        self.assertEqual(damaged.confidence, 0.0)
+        self.assertEqual(damaged.warnings, ["旧版警告"])
+        self.assertEqual(damaged.clean_report, {})
+
+    def test_subject_guidance_is_added_without_weakening_source_grounding(self):
+        prompt = build_knowledge_json_prompt(
+            "题1：肺炎链球菌是社区获得性肺炎的常见病原体。",
+            subject="医学考研",
+            chapter_name="内科学",
+            extraction_guidance="优先识别诊断依据、鉴别诊断和用药禁忌。",
+        )
+        self.assertIn("诊断依据、鉴别诊断和用药禁忌", prompt)
+        self.assertIn("只基于用户提供的资料内容", prompt)
+        self.assertIn("不能突破原文依据", prompt)
+
     def test_cleaner_removes_promo_lines_but_preserves_question_context(self):
         raw_text = """
 === 第1页 ===
@@ -118,6 +159,27 @@ WB
         )
         self.assertTrue(any("分段抽取" in warning for warning in warnings))
         self.assertTrue(any(getattr(draft, "source_page", "") == "第11页" for draft in drafts))
+
+    def test_very_long_draft_extraction_evenly_covers_last_page_within_budget(self):
+        text = "\n\n".join(
+            f"=== 第{page}页 ===\n题{page}：第{page}页的核心机制用于验证长文档覆盖。"
+            + ("该页包含独立且可复习的详细说明。" * 120)
+            for page in range(1, 31)
+        )
+
+        drafts, warnings = extract_knowledge_points_as_drafts(
+            text,
+            subject="408综合",
+            chapter_name="长文档覆盖测试",
+            max_points=6,
+            llm_callable=lambda _prompt: (_ for _ in ()).throw(RuntimeError("mock llm failure")),
+        )
+
+        self.assertLessEqual(len(drafts), 6)
+        self.assertTrue(any(getattr(draft, "source_page", "") == "第30页" for draft in drafts))
+        self.assertTrue(any("均匀选取" in warning for warning in warnings))
+        self.assertTrue(any("覆盖首段、中段和末段" in warning for warning in warnings))
+        self.assertTrue(any("未逐段调用模型" in warning for warning in warnings))
 
     def test_image_dominant_pdf_forces_ocr_fallback(self):
         sample_pdf = WORKSPACE_DIR / "kaoyan-assistant" / "data" / "test_materials" / "820" / "电子科技大学-820-2012-真题.pdf"

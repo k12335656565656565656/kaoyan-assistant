@@ -40,6 +40,17 @@ pages/
   review_cards.py
 ```
 
+## Professional Knowledge Workflow Foundation (2026-07)
+
+The first stability pass now implements the following boundaries:
+
+- `professional_knowledge/default_subjects.json` is the bundled subject registry; personal overrides are merged from `data/config/custom_subjects.json`.
+- `repositories/material_repo.py` owns backward-compatible material schema migration, extraction persistence, confirmed text, workflow snapshots, status, and resume queries.
+- `repositories/knowledge_repo.py` owns idempotent confirmed-point writes and material count reconciliation.
+- `knowledge_base.py` still contains Streamlit orchestration, but material writes no longer depend on page-local SQL or session state alone.
+
+The next decomposition target is to move the import, confirmation, and repository views out of `knowledge_base.py` into focused page modules without changing this persistence contract.
+
 ## Separation of Responsibilities
 
 ### Services

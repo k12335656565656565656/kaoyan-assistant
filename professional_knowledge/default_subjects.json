@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "subjects": [
+    {
+      "key": "exam_408",
+      "catalog": {
+        "title": "408 计算机联考",
+        "subject_label": "408综合",
+        "status": "已启用",
+        "stage": "MVP",
+        "summary": "支持 PDF/OCR、知识点抽取、原文引用、复习内容与后续 RAG 扩展。",
+        "capabilities": ["知识点抽取", "原文引用", "复习内容", "后续关系图"],
+        "source_strategy": "PaddleOCR + PDF 文本提取 + 结构化知识点确认",
+        "notes": "当前主通道。后续优先接入 source_chunks、混合检索与关系图谱。",
+        "enabled": true
+      },
+      "local_source": {
+        "key": "exam_408",
+        "title": "本地 408 资料",
+        "tab_label": "本地 408 资料",
+        "root_env_var": "CSKAOYAN_ROOT",
+        "fallback_dir_name": "cskaoyan-master"
+      },
+      "max_points": 12,
+      "extraction_guidance": "优先识别数据结构、计算机组成原理、操作系统和计算机网络中的概念、算法、机制与易错点；每条知识点保留可核对的原文依据。"
+    },
+    {
+      "key": "edu_311",
+      "catalog": {
+        "title": "311 教育学",
+        "subject_label": "教育学",
+        "status": "预留框架",
+        "stage": "待接入",
+        "summary": "保留教材、真题、教育学理论知识点与复习库接入位。",
+        "capabilities": ["知识点抽取", "教材引用", "题型归纳"],
+        "source_strategy": "待接入 MinerU / OCR / chunk 入库",
+        "notes": "适合作为统一专业课框架的下一批接入对象。",
+        "enabled": false
+      },
+      "local_source": null,
+      "max_points": 12,
+      "extraction_guidance": "优先抽取教育学人物、理论、流派、制度、历史脉络和观点比较，并区分教材原文与推断性扩展。"
+    },
+    {
+      "key": "psych_312",
+      "catalog": {
+        "title": "312 心理学",
+        "subject_label": "心理学",
+        "status": "预留框架",
+        "stage": "待接入",
+        "summary": "保留普通心理学、实验心理学、统计测量等专业课资料入口。",
+        "capabilities": ["知识点抽取", "概念关系", "章节复习"],
+        "source_strategy": "待接入 MinerU / OCR / source_chunks",
+        "notes": "后续可重点增强概念图和理论关系图。",
+        "enabled": false
+      },
+      "local_source": null,
+      "max_points": 12,
+      "extraction_guidance": "优先抽取心理学概念、经典实验、研究方法、统计测量条件及理论之间的区别与联系。"
+    },
+    {
+      "key": "med_integrated",
+      "catalog": {
+        "title": "医学考研",
+        "subject_label": "医学考研",
+        "status": "已启用",
+        "stage": "MVP",
+        "summary": "支持 PDF/OCR、知识点抽取、原文引用、复习内容与后续 RAG 扩展。",
+        "capabilities": ["知识点抽取", "原文引用", "复习内容", "后续关系图"],
+        "source_strategy": "PaddleOCR + PDF 文本提取 + 结构化知识点确认",
+        "notes": "复用 408 同款识别与确认链路，本地资料可放在 Medical Postgraduate Entrance Examination 目录。",
+        "enabled": true
+      },
+      "local_source": {
+        "key": "medical_postgraduate",
+        "title": "本地医学考研资料",
+        "tab_label": "本地医学考研资料",
+        "root_env_var": "MEDICAL_POSTGRADUATE_ROOT",
+        "fallback_dir_name": "Medical Postgraduate Entrance Examination"
+      },
+      "max_points": 12,
+      "extraction_guidance": "优先抽取定义、病理生理机制、诊断依据、鉴别要点、治疗原则和易混淆内容；仅保留资料中有依据的结论。"
+    },
+    {
+      "key": "custom_minor_subject",
+      "catalog": {
+        "title": "小众专业课模板",
+        "subject_label": "其他",
+        "status": "可扩展",
+        "stage": "框架已留",
+        "summary": "面向通信、控制、机械、法学、艺术等小众专业课的通用接入模板。",
+        "capabilities": ["可配置学科", "知识点确认", "后续 RAG 接入"],
+        "source_strategy": "统一使用 source_chunks + knowledge_points + learning_state 三层结构",
+        "notes": "后续新增专业课时，优先补配置和 Prompt，不必重写整套页面。",
+        "enabled": false
+      },
+      "local_source": null,
+      "max_points": 12,
+      "extraction_guidance": "从资料原文中抽取可独立复习的核心概念、原理、方法、条件和易错点；缺乏依据时标记不确定，不补写资料外事实。"
+    }
+  ]
+}

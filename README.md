@@ -12,6 +12,8 @@
 - 专业知识库独立入口
 - PDF 文本提取与 OCR 回退
 - LLM 驱动的知识点抽取与问答
+- 可配置专业课向导与可恢复的资料确认工作流
+- 知识点幂等入库与来源依据质量门禁
 - SQLite 本地持久化
 - 学习计划、用户画像、英语/数学辅助能力
 
@@ -105,6 +107,7 @@ python -m streamlit run app_kb.py --server.port 8501 --server.fileWatcherType no
 - [SETUP.md](SETUP.md)
 - [SETUP_kb.md](SETUP_kb.md)
 - [docs/architecture.md](docs/architecture.md)
+- [docs/professional_knowledge_quick_workflow.md](docs/professional_knowledge_quick_workflow.md)
 
 ## Security
 
