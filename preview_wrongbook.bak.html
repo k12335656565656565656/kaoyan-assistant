@@ -1578,8 +1578,8 @@
     .subject-overview { grid-template-columns: 1fr; padding: 0 0.8rem; }
     .btn-wrap { align-items: stretch; flex-direction: column; gap: 10px; padding: 0.5rem 0.8rem 0.8rem; }
     .scroll-controls { position: static; justify-content: center; flex-wrap: wrap; }
-    .waterfall-wrap { grid-template-columns: 1fr; padding: 0.8rem; height: auto; }
-    .wf-col { height: 300px; margin-bottom: 12px; }
+    .waterfall-wrap { grid-template-columns: 1fr; padding: 0.8rem; height: auto; overflow-y: auto; }
+    .wf-col { height: auto; min-height: 260px; margin-bottom: 12px; overflow: visible; }
     .app { flex-direction: column; }
     .date-sidebar {
       width: 100%; min-width: unset; max-height: 100px;

@@ -439,7 +439,7 @@ st.markdown("""
         background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 35%, #3b82f6 100%) !important;
         background-size: 200% 200% !important;
         animation: bannerReveal 0.6s ease-out both, bannerShimmer 6s ease-in-out infinite !important;
-        padding: 2rem 2rem !important; border-radius: 20px !important;
+        padding: 1.2rem 1.8rem !important; border-radius: 20px !important;
         color: #ffffff !important; text-align: center; margin-bottom: 1.2rem;
         border: 1px solid rgba(255,255,255,0.18) !important;
         box-shadow: 0 8px 32px rgba(29,78,216,0.2), inset 0 1px 0 rgba(255,255,255,0.15);
@@ -762,6 +762,10 @@ st.markdown("""
             right: 0.5rem;
             z-index: 999;
         }
+        /* Touch target sizing */
+        .stButton button { min-height: 44px !important; padding: 10px 16px !important; }
+        button[kind="primary"] { min-height: 44px !important; }
+        .nav-item { padding: 10px 14px !important; min-height: 44px; }
     }
     @media (max-width: 480px) {
         .main-title { padding: 0.8rem !important; }
@@ -770,6 +774,19 @@ st.markdown("""
         .cal-grid { grid-template-columns: repeat(5, 1fr) !important; }
         div[data-testid="stMetricValue"] { font-size: 0.9rem !important; }
         div[data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
+        /* Force Streamlit columns to stack */
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 0.4rem !important;
+        }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+        /* Reduce fixed heights */
+        .feature-card { min-height: auto !important; }
+        /* Table horizontal scroll */
+        .study-phase-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     }
 </style>
 <style>
@@ -4535,7 +4552,7 @@ if st.session_state.page == "main":
         st.rerun()
 
     st.markdown("""
-    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
+    <div class="main-title" style="text-align:left;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#4f46e5,#8b5cf6);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(79,70,229,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
             <div>
@@ -5357,23 +5374,19 @@ if st.session_state.page == "hub":
          ["需求", "反馈"], "suggest"),
     ]
 
-    _row2_html = ""
-    for key, icon_cls, icon_svg, title, desc, tags, target in _card_data:
-        tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
-        _row2_html += f"""
-        <div class="feature-card">
-            <div class="card-icon {icon_cls}">{icon_svg}</div>
-            <div class="card-title">{title}</div>
-            <div class="card-desc">{desc}</div>
-            {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
-        </div>"""
-    st.markdown(f'<div class="hub-card-row">{_row2_html}</div>', unsafe_allow_html=True)
-
     fc1, fc2, fc3, fc4 = st.columns(4)
-    for col, (key, _, _, _, _, _, target) in zip(
+    for col, (key, icon_cls, icon_svg, title, desc, tags, target) in zip(
         [fc1, fc2, fc3, fc4], _card_data
     ):
         with col:
+            tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
+            st.markdown(f"""
+            <div class="feature-card">
+                <div class="card-icon {icon_cls}">{icon_svg}</div>
+                <div class="card-title">{title}</div>
+                <div class="card-desc">{desc}</div>
+                {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
+            </div>""", unsafe_allow_html=True)
             if st.button("进入", key=f"hub_{key}", use_container_width=True):
                 st.session_state.page = target
                 st.rerun()
@@ -5394,23 +5407,19 @@ if st.session_state.page == "hub":
          ["错题", "AI解析", "分类", "复习"], "wrongbook"),
     ]
 
-    _row3_html = ""
-    for key, icon_cls, icon_svg, title, desc, tags, target in _card_data2:
-        tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
-        _row3_html += f"""
-        <div class="feature-card">
-            <div class="card-icon {icon_cls}">{icon_svg}</div>
-            <div class="card-title">{title}</div>
-            <div class="card-desc">{desc}</div>
-            {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
-        </div>"""
-    st.markdown(f'<div class="hub-card-row">{_row3_html}</div>', unsafe_allow_html=True)
-
     wc1, wc2, wc3, wc4 = st.columns(4)
-    for col, (key, _, _, _, _, _, target) in zip(
+    for col, (key, icon_cls, icon_svg, title, desc, tags, target) in zip(
         [wc1, wc2, wc3, wc4], _card_data2
     ):
         with col:
+            tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
+            st.markdown(f"""
+            <div class="feature-card">
+                <div class="card-icon {icon_cls}">{icon_svg}</div>
+                <div class="card-title">{title}</div>
+                <div class="card-desc">{desc}</div>
+                {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
+            </div>""", unsafe_allow_html=True)
             if st.button("进入", key=f"hub_{key}", use_container_width=True):
                 st.session_state.page = target
                 st.rerun()
@@ -5420,7 +5429,7 @@ if st.session_state.page == "hub":
 # ==================== 高校热度查询 ====================
 if st.session_state.page == "popularity":
     st.markdown("""
-    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
+    <div class="main-title" style="text-align:left;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#db2777,#ec4899);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(219,39,119,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
             <div>
@@ -5673,7 +5682,7 @@ if st.session_state.page == "material":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
+    <div class="main-title" style="text-align:left;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#ca8a04,#eab308);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(202,138,4,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
             <div>
@@ -6362,7 +6371,7 @@ if st.session_state.page == "english":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
+    <div class="main-title" style="text-align:left;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#059669,#10b981);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(5,150,105,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg></div>
             <div>
@@ -6825,7 +6834,7 @@ if st.session_state.page == "checkin":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
+    <div class="main-title" style="text-align:left;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#16a34a,#22c55e);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(22,163,74,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
             <div>
@@ -7015,7 +7024,7 @@ if st.session_state.page == "checkin":
 
         # 阶段说明卡片
         st.markdown(f"""
-        <div style="background:var(--bg-elevated, #f8fafc); border-radius:12px; padding:clamp(12px,2vw,20px); margin-bottom:20px; border:1px solid var(--border, #e2e8f0);">
+        <div class="study-phase-table" style="background:var(--bg-elevated, #f8fafc); border-radius:12px; padding:clamp(12px,2vw,20px); margin-bottom:20px; border:1px solid var(--border, #e2e8f0);">
             <h3 style="margin:0 0 12px 0; color:var(--text-main, #1e293b);">当前阶段：{current_phase}</h3>
             <table style="width:100%; border-collapse:collapse; font-size:clamp(12px,1.5vw,14px);">
                 <tr style="background:#4f46e5; color:#fff;">
