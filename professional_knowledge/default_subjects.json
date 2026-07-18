@@ -22,6 +22,7 @@
         "fallback_dir_name": "cskaoyan-master"
       },
       "max_points": 12,
+      "exam_subjects": ["数据结构", "计算机组成原理", "操作系统", "计算机网络"],
       "extraction_guidance": "优先识别数据结构、计算机组成原理、操作系统和计算机网络中的概念、算法、机制与易错点；每条知识点保留可核对的原文依据。"
     },
     {
@@ -39,6 +40,7 @@
       },
       "local_source": null,
       "max_points": 12,
+      "exam_subjects": ["教育学原理", "中外教育史", "教育心理学", "教育研究方法"],
       "extraction_guidance": "优先抽取教育学人物、理论、流派、制度、历史脉络和观点比较，并区分教材原文与推断性扩展。"
     },
     {
@@ -56,6 +58,7 @@
       },
       "local_source": null,
       "max_points": 12,
+      "exam_subjects": ["普通心理学", "发展与教育心理学", "实验心理学", "心理统计与测量"],
       "extraction_guidance": "优先抽取心理学概念、经典实验、研究方法、统计测量条件及理论之间的区别与联系。"
     },
     {
@@ -79,6 +82,7 @@
         "fallback_dir_name": "Medical Postgraduate Entrance Examination"
       },
       "max_points": 12,
+      "exam_subjects": ["生理学", "生物化学", "病理学", "内科学", "外科学"],
       "extraction_guidance": "优先抽取定义、病理生理机制、诊断依据、鉴别要点、治疗原则和易混淆内容；仅保留资料中有依据的结论。"
     },
     {
@@ -96,6 +100,7 @@
       },
       "local_source": null,
       "max_points": 12,
+      "exam_subjects": [],
       "extraction_guidance": "从资料原文中抽取可独立复习的核心概念、原理、方法、条件和易错点；缺乏依据时标记不确定，不补写资料外事实。"
     }
   ]

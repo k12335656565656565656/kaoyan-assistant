@@ -19,7 +19,7 @@ class LlmGatewayConfig:
 
 def load_gateway_config() -> LlmGatewayConfig:
     return LlmGatewayConfig(
-        api_key=os.environ.get("AI_API_KEY", "sk-cg6cwgbricj887hfgtl7zmytlrj4mj4thpf5qnpln749vx08").strip(),
+        api_key=os.environ.get("AI_API_KEY", "").strip(),
         api_base=os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip(),
         default_model=os.environ.get("AI_MODEL", "mimo-v2.5").strip() or "mimo-v2.5",
     )
@@ -28,16 +28,17 @@ def load_gateway_config() -> LlmGatewayConfig:
 def extract_message_text(message: dict) -> str:
     if not isinstance(message, dict):
         return ""
-    return (
-        message.get("content")
-        or message.get("reasoning_content")
-        or message.get("text")
-        or ""
-    )
+    # Some reasoning models return a separate reasoning_content field. That is
+    # internal working text and should never be rendered as the student's answer.
+    return message.get("content") or message.get("text") or ""
 
 
 def _build_headers(api_key: str) -> dict[str, str]:
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "kaoyan-assistant/1.0",
+    }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -128,12 +129,14 @@ def chat_completion_message(
     retries: int = 2,
 ) -> dict:
     config = config or load_gateway_config()
+    resolved_model = model or config.default_model
     payload = {
-        "model": model or config.default_model,
+        "model": resolved_model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    _apply_provider_options(payload, resolved_model)
     with _request_json(payload=payload, timeout=timeout, stream=False, config=config, retries=retries) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return data["choices"][0]["message"]
@@ -160,6 +163,18 @@ def simple_prompt_completion(
     )
 
 
+def _should_disable_thinking(model_name: str) -> bool:
+    value = os.environ.get("AI_DISABLE_THINKING", "1").strip().lower()
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return "deepseek" in (model_name or "").lower()
+
+
+def _apply_provider_options(payload: dict, model_name: str) -> None:
+    if _should_disable_thinking(model_name):
+        payload["thinking"] = {"type": "disabled"}
+
+
 def stream_chat_completion(
     *,
     messages: list[dict],
@@ -171,13 +186,15 @@ def stream_chat_completion(
     retries: int = 1,
 ) -> Iterable[str]:
     config = config or load_gateway_config()
+    resolved_model = model or config.default_model
     payload = {
-        "model": model or config.default_model,
+        "model": resolved_model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": True,
     }
+    _apply_provider_options(payload, resolved_model)
 
     with _request_json(payload=payload, timeout=timeout, stream=True, config=config, retries=retries) as resp:
         buffer = ""
@@ -199,10 +216,6 @@ def stream_chat_completion(
                 except json.JSONDecodeError:
                     continue
                 delta_obj = obj.get("choices", [{}])[0].get("delta", {})
-                delta = (
-                    delta_obj.get("content")
-                    or delta_obj.get("reasoning_content")
-                    or ""
-                )
+                delta = delta_obj.get("content") or ""
                 if delta:
                     yield delta

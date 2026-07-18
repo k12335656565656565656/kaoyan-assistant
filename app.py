@@ -18,7 +18,6 @@ import urllib.error
 import re
 import traceback
 import secrets
-import hashlib
 import io
 import kaoyan_predict
 from recommend import generate_recommendation
@@ -42,7 +41,7 @@ load_dotenv(Path(__file__).with_name(".env"))
 st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide", initial_sidebar_state="expanded")
 
 # API配置
-API_KEY = os.environ.get("AI_API_KEY", "sk-cg6cwgbricj887hfgtl7zmytlrj4mj4thpf5qnpln749vx08").strip()
+API_KEY = os.environ.get("AI_API_KEY", "").strip()
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip()
 MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5").strip() or "mimo-v2.5"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
@@ -401,10 +400,6 @@ st.markdown("""
     .feature-card:nth-child(2) { animation-delay: 0.12s, 0.12s; }
     .feature-card:nth-child(3) { animation-delay: 0.19s, 0.19s; }
     .feature-card:nth-child(4) { animation-delay: 0.26s, 0.26s; }
-    .feature-card:nth-child(5) { animation-delay: 0.33s, 0.33s; }
-    .feature-card:nth-child(6) { animation-delay: 0.40s, 0.40s; }
-    .feature-card:nth-child(7) { animation-delay: 0.47s, 0.47s; }
-    .feature-card:nth-child(8) { animation-delay: 0.54s, 0.54s; }
 
     /* QA card — smooth rise */
     .qa-card {
@@ -439,7 +434,7 @@ st.markdown("""
         background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 35%, #3b82f6 100%) !important;
         background-size: 200% 200% !important;
         animation: bannerReveal 0.6s ease-out both, bannerShimmer 6s ease-in-out infinite !important;
-        padding: 1.2rem 1.8rem !important; border-radius: 20px !important;
+        padding: 2rem 2rem !important; border-radius: 20px !important;
         color: #ffffff !important; text-align: center; margin-bottom: 1.2rem;
         border: 1px solid rgba(255,255,255,0.18) !important;
         box-shadow: 0 8px 32px rgba(29,78,216,0.2), inset 0 1px 0 rgba(255,255,255,0.15);
@@ -511,19 +506,6 @@ st.markdown("""
         display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px;
         position: relative; z-index: 1;
     }
-    /* ── Hub Card Grid (equal-height row) ── */
-    .hub-card-row {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 1rem;
-        margin-bottom: 0.3rem;
-    }
-    @media (max-width: 768px) {
-        .hub-card-row { grid-template-columns: repeat(2, 1fr); }
-    }
-    @media (max-width: 480px) {
-        .hub-card-row { grid-template-columns: 1fr; }
-    }
     .feature-card .card-tag {
         font-size: 0.68rem; padding: 3px 9px;
         background: rgba(241,245,249,0.8); color: #6366f1;
@@ -537,8 +519,6 @@ st.markdown("""
     .icon-fb   { background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); color: #0284c7; }
     .icon-mat  { background: linear-gradient(135deg, #fefce8 0%, #fef9c3 100%); color: #ca8a04; }
     .icon-ck   { background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); color: #16a34a; }
-    .icon-pro  { background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); color: #7c3aed; }
-    .icon-wb   { background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%); color: #e11d48; }
 
     /* ── Card Breathing Animation ── */
     @keyframes cardBreathe {
@@ -620,7 +600,6 @@ st.markdown("""
     button[kind="primary"], .st-key-hub_qa button, .st-key-hub_pop button,
     .st-key-hub_english button, .st-key-hub_suggest button,
     .st-key-hub_material button, .st-key-hub_checkin button,
-    .st-key-hub_professional_kb button, .st-key-hub_wrongbook button,
     button[data-testid="baseButton-primary"],
     div[data-testid="stButton"] button[kind="primary"] {
         background: #2563eb !important; color: #ffffff !important;
@@ -762,10 +741,6 @@ st.markdown("""
             right: 0.5rem;
             z-index: 999;
         }
-        /* Touch target sizing */
-        .stButton button { min-height: 44px !important; padding: 10px 16px !important; }
-        button[kind="primary"] { min-height: 44px !important; }
-        .nav-item { padding: 10px 14px !important; min-height: 44px; }
     }
     @media (max-width: 480px) {
         .main-title { padding: 0.8rem !important; }
@@ -774,19 +749,6 @@ st.markdown("""
         .cal-grid { grid-template-columns: repeat(5, 1fr) !important; }
         div[data-testid="stMetricValue"] { font-size: 0.9rem !important; }
         div[data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
-        /* Force Streamlit columns to stack */
-        div[data-testid="stHorizontalBlock"] {
-            flex-wrap: wrap !important;
-            gap: 0.4rem !important;
-        }
-        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
-            flex: 1 1 100% !important;
-            min-width: 100% !important;
-        }
-        /* Reduce fixed heights */
-        .feature-card { min-height: auto !important; }
-        /* Table horizontal scroll */
-        .study-phase-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     }
 </style>
 <style>
@@ -853,86 +815,37 @@ def get_cookie_manager():
 
 cookie_manager = get_cookie_manager()
 
-AUTH_SESSION_DAYS = 30
-
 def generate_login_token():
-    """生成仅保存在浏览器 Cookie 中的随机会话 token。"""
+    """生成 64 字符随机 token"""
     return secrets.token_hex(32)
 
-
-def _token_digest(token):
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def create_login_session(user_id, token):
-    """创建独立设备会话；数据库只保存 token 摘要。"""
-    now = datetime.now()
-    expires_at = now + timedelta(days=AUTH_SESSION_DAYS)
+def save_login_token(user_id, token):
+    """将 token 存入数据库"""
     conn = sqlite3.connect(MEMORY_DB)
-    conn.execute(
-        """INSERT INTO auth_sessions (user_id, token_hash, created_at, expires_at, last_seen_at)
-           VALUES (?, ?, ?, ?, ?)""",
-        (user_id, _token_digest(token), now.isoformat(sep=" "),
-         expires_at.isoformat(sep=" "), now.isoformat(sep=" ")),
-    )
+    c = conn.cursor()
+    c.execute("UPDATE users SET login_token=? WHERE id=?", (token, user_id))
     conn.commit()
     conn.close()
-
 
 def verify_login_token(token):
-    """验证未过期、未撤销的会话，返回所属用户而非前端声明的身份。"""
-    if not token or not isinstance(token, str):
+    """验证 token，返回 user_id 或 None"""
+    if not token:
         return None
     conn = sqlite3.connect(MEMORY_DB)
-    row = conn.execute(
-        """SELECT u.id, u.username
-           FROM auth_sessions s JOIN users u ON u.id=s.user_id
-           WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?
-           LIMIT 1""",
-        (_token_digest(token), datetime.now().isoformat(sep=" ")),
-    ).fetchone()
+    c = conn.cursor()
+    c.execute("SELECT id, username FROM users WHERE login_token=?", (token,))
+    row = c.fetchone()
     conn.close()
-    return {"user_id": row[0], "username": row[1]} if row else None
+    if row:
+        return {"user_id": row[0], "username": row[1]}
+    return None
 
-
-def revoke_login_session(token):
-    """只撤销当前设备会话，不影响同账号的其他设备。"""
-    if not token or not isinstance(token, str):
-        return
+def clear_login_token(user_id):
+    """清除数据库中的 token"""
     conn = sqlite3.connect(MEMORY_DB)
-    conn.execute(
-        "UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
-        (datetime.now().isoformat(sep=" "), _token_digest(token)),
-    )
+    conn.execute("UPDATE users SET login_token=NULL WHERE id=?", (user_id,))
     conn.commit()
     conn.close()
-
-
-def clear_user_session_state():
-    """在登录切换、退出或会话失效时移除全部用户私有的页面状态。"""
-    for key in list(st.session_state.keys()):
-        if key != "cookie_manager":
-            del st.session_state[key]
-    st.session_state.logged_in = False
-    st.session_state.user_id = None
-    st.session_state.username = None
-    st.session_state.page = "hub"
-
-
-def set_authenticated_user(user_info):
-    """切换身份时先清理旧用户状态，再写入已验证的身份。"""
-    clear_user_session_state()
-    st.session_state.logged_in = True
-    st.session_state.user_id = user_info["user_id"]
-    st.session_state.username = user_info["username"]
-
-
-def require_authenticated_user_id():
-    """返回当前已验证用户；绝不把缺失身份回退到默认用户。"""
-    user_id = st.session_state.get("user_id")
-    if not st.session_state.get("logged_in") or not isinstance(user_id, int):
-        raise RuntimeError("未认证用户不能访问或写入用户数据")
-    return user_id
 
 # ==================== 核心功能 ====================
 
@@ -1037,6 +950,8 @@ def get_knowledge_text(kid, corpus):
             return doc["text"]
     return ""
 
+import hashlib
+
 # ==================== 用户管理 ====================
 
 def hash_password(pw):
@@ -1069,7 +984,7 @@ def login_user(username, password):
     return row[0] if row else None
 
 def get_experience_file():
-    uid = require_authenticated_user_id()
+    uid = st.session_state.get("user_id", 1)
     return Path(f"agent_experience_{uid}.md")
 
 def load_agent_experience():
@@ -1114,22 +1029,8 @@ def init_memory_db():
     try: c.execute("SELECT login_token FROM users LIMIT 1")
     except: c.execute("ALTER TABLE users ADD COLUMN login_token TEXT")
 
-    # 多设备独立会话。旧版 users.login_token 是单设备设计，升级时统一废弃。
-    c.execute("""CREATE TABLE IF NOT EXISTS auth_sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        token_hash TEXT NOT NULL UNIQUE,
-        created_at TIMESTAMP NOT NULL,
-        expires_at TIMESTAMP NOT NULL,
-        revoked_at TIMESTAMP,
-        last_seen_at TIMESTAMP
-    )""")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)")
-    c.execute("UPDATE users SET login_token=NULL WHERE login_token IS NOT NULL")
-
     c.execute("""CREATE TABLE IF NOT EXISTS knowledge_mastery (
-        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER DEFAULT 1,
         mastery_level REAL DEFAULT 0, status TEXT DEFAULT '陌生',
         times_correct INTEGER DEFAULT 0, times_wrong INTEGER DEFAULT 0,
         stability REAL DEFAULT 1.0, last_review TIMESTAMP,
@@ -1151,12 +1052,12 @@ def init_memory_db():
         c.execute("ALTER TABLE knowledge_mastery ADD COLUMN stability REAL DEFAULT 1.0")
 
     c.execute("""CREATE TABLE IF NOT EXISTS user_performance (
-        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY, user_id INTEGER DEFAULT 1,
         knowledge_id TEXT, is_correct INTEGER, error_type TEXT,
         mastery_score REAL, created_at TIMESTAMP)""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS review_challenges (
-        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER DEFAULT 1,
         challenge_type TEXT, completed INTEGER DEFAULT 0,
         created_at TIMESTAMP)""")
 
@@ -1436,6 +1337,62 @@ try:
     from professional_knowledge import render_professional_knowledge_system
 except Exception:
     render_professional_knowledge_system = None
+
+@st.cache_resource
+def _start_wb_save_server():
+    """启动本地 HTTP 服务器接收错题保存请求（支持图片 base64，绕开 URL 长度限制）。
+    返回监听端口；启动失败返回 None。"""
+    import threading, json as _json_srv
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import os as _os
+
+    PORT = 8753
+    _DB_PATH = _os.path.abspath(MEMORY_DB)
+
+    class WBSaveHandler(BaseHTTPRequestHandler):
+        def _cors(self):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+        def do_OPTIONS(self):
+            self.send_response(204); self._cors(); self.end_headers()
+
+        def do_POST(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if length <= 0 or length > 24 * 1024 * 1024:
+                    return self._respond(413, {"success": False, "error": "图片数据过大，请减少图片数量后重试"})
+                body = self.rfile.read(length).decode("utf-8")
+                data = _json_srv.loads(body)
+                uid = data.get("user_id")
+                if not uid:
+                    return self._respond(400, {"success": False, "error": "未登录"})
+                conn = sqlite3.connect(_DB_PATH)
+                result = save_wrongbook_payload(conn, uid, data)
+                conn.close()
+                if result.get("ok"):
+                    self._respond(200, {"success": True, "updated": bool(result.get("updated"))})
+                else:
+                    self._respond(400, {"success": False, "error": result.get("error", "保存失败")})
+            except Exception as e:
+                self._respond(500, {"success": False, "error": str(e)})
+
+        def _respond(self, code, obj):
+            body = _json_srv.dumps(obj).encode("utf-8")
+            self.send_response(code); self._cors()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+
+        def log_message(self, *a): pass
+
+    try:
+        srv = HTTPServer(("127.0.0.1", PORT), WBSaveHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return PORT
+    except Exception:
+        return None
 
 
 def log_visit(action, detail=""):
@@ -1783,8 +1740,8 @@ def _save_knowledge_points(user_id, material_id, subject, chapter_name, llm_resu
             VALUES (?, ?, ?, ?, ?, ?)""",
             (user_id, material_id, subject, chapter_name, name_kb, llm_result))
         count += 1
-    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=? AND user_id=?",
-             (count, material_id, user_id))
+    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=?",
+             (count, material_id))
     conn.commit()
     conn.close()
     return count
@@ -2234,12 +2191,11 @@ def get_user_tasks(user_id):
     conn.close()
     return res
 
-def update_task_status(user_id, task_id, new_status):
+def update_task_status(task_id, new_status):
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     completed_at = datetime.now().strftime("%Y-%m-%d") if new_status == "completed" else None
-    c.execute("UPDATE plan_tasks SET status = ?, completed_at = ? WHERE id = ? AND user_id = ?",
-              (new_status, completed_at, task_id, user_id))
+    c.execute("UPDATE plan_tasks SET status = ?, completed_at = ? WHERE id = ?", (new_status, completed_at, task_id))
     conn.commit()
     conn.close()
 
@@ -2832,7 +2788,7 @@ PROBLEM_EVAL_PROMPT = """你是考研数学辅导专家，同时也是教育心�
 
 def update_memory(kid, is_mastered, error_type="", mastery_score=0):
     init_memory_db()
-    uid = require_authenticated_user_id()
+    uid = st.session_state.get("user_id", 1)
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("SELECT times_correct, times_wrong, stability FROM knowledge_mastery WHERE knowledge_id=? AND user_id=?", (kid, uid))
@@ -2867,7 +2823,7 @@ def update_memory(kid, is_mastered, error_type="", mastery_score=0):
 
 def add_to_wrongbook(question, correct_answer, user_answer="", explanation="", subject=""):
     """通用：将错题写入 user_wrong_questions 表"""
-    uid = require_authenticated_user_id()
+    uid = st.session_state.get("user_id", 1)
     init_memory_db()
     payload = {
         "subject": subject,
@@ -2938,7 +2894,7 @@ def _extract_wrongbook_question_locally(question="", correct_answer="", user_ans
     return _clean_extracted_question(question)
 
 def _record_qa_knowledge(docs):
-    uid = require_authenticated_user_id()
+    uid = st.session_state.get("user_id", 1)
     try:
         init_memory_db()
         conn = sqlite3.connect(MEMORY_DB)
@@ -2954,7 +2910,7 @@ def _record_qa_knowledge(docs):
 
 def get_memory_stats():
     init_memory_db()
-    uid = require_authenticated_user_id()
+    uid = st.session_state.get("user_id", 1)
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM knowledge_mastery WHERE status='掌握' AND user_id=?", (uid,))
@@ -2968,7 +2924,7 @@ def get_memory_stats():
 
 def get_weak_points():
     init_memory_db()
-    uid = require_authenticated_user_id()
+    uid = st.session_state.get("user_id", 1)
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("""SELECT knowledge_id, times_wrong, times_correct, status, stability, error_type
@@ -2983,7 +2939,7 @@ def get_weak_points():
 
 def get_review_candidates():
     init_memory_db()
-    uid = require_authenticated_user_id()
+    uid = st.session_state.get("user_id", 1)
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("""SELECT knowledge_id, mastery_level, status, stability, last_review
@@ -3013,12 +2969,12 @@ def get_review_candidates():
     candidates.sort(key=lambda x: x["urgency"], reverse=True)
     return candidates[:10]
 
-def create_review_challenge(user_id, kid):
+def create_review_challenge(kid):
     init_memory_db()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
-    c.execute("""INSERT INTO review_challenges (knowledge_id, user_id, challenge_type, created_at)
-        VALUES (?, ?, '自动复习', ?)""", (kid, user_id, datetime.now()))
+    c.execute("""INSERT INTO review_challenges (knowledge_id, challenge_type, created_at)
+        VALUES (?, '自动复习', ?)""", (kid, datetime.now()))
     conn.commit()
     conn.close()
 
@@ -4156,21 +4112,16 @@ if "page" not in st.session_state:
 # 确保数据库表存在（登录前就必须建好）
 init_memory_db()
 
-# 每次 rerun 都以 Cookie 会话为准，不能信任可能残留的 session_state 身份。
-token = cookie_manager.get("auth_token")
-user_info = verify_login_token(token)
-session_user_id = st.session_state.get("user_id")
-if user_info:
-    if (not st.session_state.get("logged_in")
-            or session_user_id != user_info["user_id"]
-            or st.session_state.get("username") != user_info["username"]):
-        set_authenticated_user(user_info)
-        st.rerun()
-elif st.session_state.get("logged_in") or session_user_id is not None:
-    clear_user_session_state()
+# 自动登录（CookieManager 方案）
+if not st.session_state.logged_in:
+    token = cookie_manager.get("auth_token")
     if token:
-        cookie_manager.delete("auth_token")
-    st.rerun()
+        user_info = verify_login_token(token)
+        if user_info:
+            st.session_state.logged_in = True
+            st.session_state.user_id = user_info["user_id"]
+            st.session_state.username = user_info["username"]
+            st.rerun()
 
 if not st.session_state.logged_in:
     # ─── 登录/注册页 ───
@@ -4196,9 +4147,11 @@ if not st.session_state.logged_in:
                 uid = login_user(username, password)
                 if uid:
                     token = generate_login_token()
-                    create_login_session(uid, token)
-                    cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=AUTH_SESSION_DAYS))
-                    set_authenticated_user({"user_id": uid, "username": username})
+                    save_login_token(uid, token)
+                    cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
+                    st.session_state.logged_in = True
+                    st.session_state.user_id = uid
+                    st.session_state.username = username
                     st.success("登录成功！")
                     st.rerun()
                 else:
@@ -4219,9 +4172,11 @@ if not st.session_state.logged_in:
                     uid = register_user(new_user, new_pass)
                     if uid:
                         token = generate_login_token()
-                        create_login_session(uid, token)
-                        cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=AUTH_SESSION_DAYS))
-                        set_authenticated_user({"user_id": uid, "username": new_user})
+                        save_login_token(uid, token)
+                        cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = uid
+                        st.session_state.username = new_user
                         st.success(f"注册成功！欢迎 {new_user}")
                         st.rerun()
                     else:
@@ -4348,9 +4303,11 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     if st.button("退出登录", key="sidebar_logout", use_container_width=True):
-        revoke_login_session(cookie_manager.get("auth_token"))
+        clear_login_token(st.session_state.get("user_id", 0))
         cookie_manager.delete("auth_token")
-        clear_user_session_state()
+        st.session_state.logged_in = False
+        st.session_state.user_id = None
+        st.session_state.page = "hub"
         st.rerun()
 
 # ==================== 全局：加入错题本表单 ====================
@@ -4552,7 +4509,7 @@ if st.session_state.page == "main":
         st.rerun()
 
     st.markdown("""
-    <div class="main-title" style="text-align:left;">
+    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#4f46e5,#8b5cf6);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(79,70,229,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
             <div>
@@ -5001,7 +4958,7 @@ if st.session_state.page == "main":
                                         q_raw = quiz['questions']
                                         qm = re.search(r'Q:\s*(.+)', q_raw)
                                         display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
-                                        save_feynman_record(require_authenticated_user_id(), "problem", display_q, ans, result, sc, se, sa, total)
+                                        save_feynman_record(st.session_state.get("user_id", 1), "problem", display_q, ans, result, sc, se, sa, total)
                                         st.session_state._kb_result = result
                                         st.session_state._kb_quiz = None
                                         st.rerun()
@@ -5050,7 +5007,7 @@ if st.session_state.page == "main":
                                         if m: se = int(m.group(1))
                                         m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
                                         if m: sa = int(m.group(1))
-                                        save_feynman_record(require_authenticated_user_id(), "concept", concept_quiz_text, ans, result, sc, se, sa, total)
+                                        save_feynman_record(st.session_state.get("user_id", 1), "concept", concept_quiz_text, ans, result, sc, se, sa, total)
                                         st.session_state._kb_concept_result = result
                                         st.rerun()
                                     except Exception as e:
@@ -5183,7 +5140,7 @@ if st.session_state.page == "main":
                             if m: score_authentic = int(m.group(1))
 
                             save_feynman_record(
-                                require_authenticated_user_id(),
+                                st.session_state.get("user_id", 1),
                                 mode_key, _ftopic, _fanswer, result,
                                 score_correct, score_expression, score_authentic, total_score)
 
@@ -5195,7 +5152,7 @@ if st.session_state.page == "main":
 
             st.markdown("---")
             st.markdown("### 历史记录")
-            feynman_history = get_feynman_history(require_authenticated_user_id())
+            feynman_history = get_feynman_history(st.session_state.get("user_id", 1))
             if feynman_history:
                 for record in feynman_history:
                     mode_label = "概念" if record["mode"] == "concept" else "解题"
@@ -5359,6 +5316,8 @@ if st.session_state.page == "hub":
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Row 2: 4 Feature Cards ──
+    fc1, fc2, fc3, fc4 = st.columns(4)
+
     _card_data = [
         ("math", "icon-math", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>""",
          "数学问答", "110 个知识点 · 智能问答 · 遗忘曲线复习",
@@ -5374,7 +5333,6 @@ if st.session_state.page == "hub":
          ["需求", "反馈"], "suggest"),
     ]
 
-    fc1, fc2, fc3, fc4 = st.columns(4)
     for col, (key, icon_cls, icon_svg, title, desc, tags, target) in zip(
         [fc1, fc2, fc3, fc4], _card_data
     ):
@@ -5386,50 +5344,55 @@ if st.session_state.page == "hub":
                 <div class="card-title">{title}</div>
                 <div class="card-desc">{desc}</div>
                 {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
-            </div>""", unsafe_allow_html=True)
+            </div>
+            """, unsafe_allow_html=True)
             if st.button("进入", key=f"hub_{key}", use_container_width=True):
                 st.session_state.page = target
                 st.rerun()
 
-    # ── Row 3: 4 Feature Cards ──
-    _card_data2 = [
-        ("material", "icon-mat", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>""",
-         "学习资料生成", "AI 生成习题册 · 知识点整理 · 模考卷 · DOCX 导出",
-         ["习题生成", "模考卷", "知识点", "DOCX"], "material"),
-        ("checkin", "icon-ck", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>""",
-         "打卡督学", "每日打卡 · 学习计划 · 番茄计时 · 学习画像",
-         ["打卡", "番茄钟", "日记", "画像"], "checkin"),
-        ("professional_kb", "icon-pro", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>""",
-         "专业课", "专业知识库 · OCR 识别 · 智能出题 · 向量检索",
-         ["知识库", "OCR", "出题", "检索"], "professional_kb"),
-        ("wrongbook", "icon-wb", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>""",
-         "错题本", "错题收集 · 分类管理 · AI 解析 · 针对性复习",
-         ["错题", "AI解析", "分类", "复习"], "wrongbook"),
-    ]
+    # ── Row 3: 2 Wide Cards ──
+    wc1, wc2 = st.columns(2)
 
-    wc1, wc2, wc3, wc4 = st.columns(4)
-    for col, (key, icon_cls, icon_svg, title, desc, tags, target) in zip(
-        [wc1, wc2, wc3, wc4], _card_data2
-    ):
-        with col:
-            tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
-            st.markdown(f"""
-            <div class="feature-card">
-                <div class="card-icon {icon_cls}">{icon_svg}</div>
-                <div class="card-title">{title}</div>
-                <div class="card-desc">{desc}</div>
-                {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
-            </div>""", unsafe_allow_html=True)
-            if st.button("进入", key=f"hub_{key}", use_container_width=True):
-                st.session_state.page = target
-                st.rerun()
+    with wc1:
+        st.markdown("""
+        <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
+            <div class="card-icon icon-mat" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
+            <div style="flex:1;">
+                <div class="card-title">学习资料生成</div>
+                <div class="card-desc">AI 生成习题册 · 知识点整理 · DOCX 导出</div>
+                <div class="card-tags" style="margin-top:6px;">
+                    <span class="card-tag">习题生成</span><span class="card-tag">模考卷</span><span class="card-tag">DOCX</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("进入", key="hub_material", use_container_width=True):
+            st.session_state.page = "material"
+            st.rerun()
+
+    with wc2:
+        st.markdown("""
+        <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
+            <div class="card-icon icon-ck" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+            <div style="flex:1;">
+                <div class="card-title">打卡督学</div>
+                <div class="card-desc">每日打卡 · 学习计划 · 学习日记 · 番茄计时 · 学习画像</div>
+                <div class="card-tags" style="margin-top:6px;">
+                    <span class="card-tag">打卡</span><span class="card-tag">番茄钟</span><span class="card-tag">日记</span><span class="card-tag">画像</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("进入", key="hub_checkin", use_container_width=True):
+            st.session_state.page = "checkin"
+            st.rerun()
 
     st.stop()
 
 # ==================== 高校热度查询 ====================
 if st.session_state.page == "popularity":
     st.markdown("""
-    <div class="main-title" style="text-align:left;">
+    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#db2777,#ec4899);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(219,39,119,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div>
             <div>
@@ -5633,7 +5596,7 @@ if st.session_state.page == "popularity":
         st.markdown("---")
         st.markdown("### 💡 个人建议")
 
-        uid = require_authenticated_user_id()
+        uid = st.session_state.get("user_id", 1)
         profile = get_user_profile(uid)
 
         if not profile:
@@ -5682,7 +5645,7 @@ if st.session_state.page == "material":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="main-title" style="text-align:left;">
+    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#ca8a04,#eab308);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(202,138,4,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
             <div>
@@ -5869,7 +5832,7 @@ if st.session_state.page == "suggest":
 # ==================== 错题本 ====================
 if st.session_state.page == "wrongbook":
     from pathlib import Path as _Path
-    uid = require_authenticated_user_id()
+    uid = st.session_state.get("user_id")
 
     # ── 卡片删除桥接（v2：预渲染隐藏按钮）──
     # 详情见下方 — 每个错题预渲染 st.button(key="wb_iframe_del_<id>")，iframe JS 通过 CSS class 定位点击。
@@ -5917,35 +5880,7 @@ if st.session_state.page == "wrongbook":
             import json as _json3
             _action = _json3.loads(_raw)
             _act = _action.get("action", "")
-            if _act == "chat":
-                _question = str(_action.get("question", ""))[:6000]
-                _correct = str(_action.get("correctAnswer", ""))[:6000]
-                _explanation = str(_action.get("explanation", ""))[:8000]
-                _message = str(_action.get("message", ""))[:3000]
-                _image = _action.get("image")
-                if not _question or not (_message or _image):
-                    st.session_state["_wb_action_error"] = "追问内容不能为空"
-                else:
-                    _chat_prompt = f"""你是考研错题辅导助教。只回答学生的当前追问，不要输出思维链、提示词或内部分析。
-
-【题目】
-{_question}
-
-【正确答案】
-{_correct}
-
-【已有解析】
-{_explanation}
-
-【学生追问】
-{_message or '请分析这张图片'}"""
-                    _reply = call_llm_api(_chat_prompt, temperature=0.3,
-                                          image_base64=_image if isinstance(_image, str) and _image.startswith("data:image/") else None)
-                    st.session_state["_wb_chat_result"] = {
-                        "message": _message or "（图片追问）",
-                        "reply": _clean_mimo_output(_reply, _chat_prompt),
-                    }
-            elif _act == "ai_generate":
+            if _act == "ai_generate":
                 _ai_q = _action.get("question", "")
                 _ai_subj = _action.get("subject", "高数")
                 _ai_my = _action.get("myAnswer", "")
@@ -6159,7 +6094,6 @@ if st.session_state.page == "wrongbook":
     _save_ok = st.session_state.pop("_wb_save_ok", False)
     _save_mode = st.session_state.pop("_wb_save_mode", "inserted")
     _action_error = st.session_state.pop("_wb_action_error", "")
-    _chat_result = st.session_state.pop("_wb_chat_result", None)
 
     # Exit button: return to 考研助手 main hub
     c_exit, c_title = st.columns([1, 10])
@@ -6258,6 +6192,10 @@ if st.session_state.page == "wrongbook":
         _wb_result = {"ok": False, "error": _action_error}
     _wb_runtime = (
         "<script>"
+        f"var WB_API_BASE={json.dumps(API_BASE)};"
+        f"var WB_API_KEY={json.dumps(API_KEY)};"
+        f"var WB_USER_ID={json.dumps(uid)};"
+        "var WB_SAVE_PORT=0;"
         f"var WB_SAVE_RESULT={json.dumps(_wb_result, ensure_ascii=False)};"
         "</script>"
     )
@@ -6311,18 +6249,17 @@ if st.session_state.page == "wrongbook":
         real_data_js = f"const wrongQuestionsRaw = {_json.dumps(data_js, ensure_ascii=False)};"
         html_content = html_content[:dummy_start] + real_data_js + html_content[dummy_end:]
 
-    # 旧模板占位符保留为空：API Key、保存端口和用户 ID 均不得下发至浏览器。
-    html_content = html_content.replace("/*__API_CONFIG__*/", "")
+    # 注入 API 配置，供 iframe 内 JS 直接调用 AI（绕过 textarea 桥接）
+    _wb_save_port = _start_wb_save_server()
+    html_content = html_content.replace("/*__API_CONFIG__*/",
+        f'var WB_API_BASE={_json.dumps(API_BASE)};var WB_API_KEY={_json.dumps(API_KEY)};'
+        f'var WB_SAVE_PORT={_wb_save_port or "null"};var WB_USER_ID={uid or 0};')
 
     # Inject AI result, extracted text & save status
     if _ai_result:
         _ai_ca = _json.dumps(_collapse_math(_fix_latex(_ai_result.get("correctAnswer",""))))
         _ai_ex = _json.dumps(_collapse_math(_fix_latex(_ai_result.get("explanation",""))))
         html_content += f"""<script>setTimeout(function(){{ setAiResult({_ai_ca},{_ai_ex}); }}, 300);</script>"""
-    if _chat_result:
-        _chat_message = _json.dumps(_chat_result.get("message", ""))
-        _chat_reply = _json.dumps(_chat_result.get("reply", ""))
-        html_content += f"""<script>setTimeout(function(){{ setChatResult({_chat_message},{_chat_reply}); }}, 300);</script>"""
     if _extracted_text:
         _ext_text = _json.dumps(_extracted_text)
         html_content += f"""<script>setTimeout(function(){{ var q=document.getElementById('addQuestion'); q.value={_ext_text}; q.placeholder=''; updateQuestionPreview(); }}, 300);</script>"""
@@ -6371,7 +6308,7 @@ if st.session_state.page == "english":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="main-title" style="text-align:left;">
+    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#059669,#10b981);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(5,150,105,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg></div>
             <div>
@@ -6834,7 +6771,7 @@ if st.session_state.page == "checkin":
         st.session_state.page = "hub"
         st.rerun()
     st.markdown("""
-    <div class="main-title" style="text-align:left;">
+    <div class="main-title" style="text-align:left;padding:1.2rem 1.8rem;">
         <div style="display:flex;align-items:center;gap:14px;">
             <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#16a34a,#22c55e);display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;box-shadow:0 4px 12px rgba(22,163,74,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
             <div>
@@ -7024,7 +6961,7 @@ if st.session_state.page == "checkin":
 
         # 阶段说明卡片
         st.markdown(f"""
-        <div class="study-phase-table" style="background:var(--bg-elevated, #f8fafc); border-radius:12px; padding:clamp(12px,2vw,20px); margin-bottom:20px; border:1px solid var(--border, #e2e8f0);">
+        <div style="background:var(--bg-elevated, #f8fafc); border-radius:12px; padding:clamp(12px,2vw,20px); margin-bottom:20px; border:1px solid var(--border, #e2e8f0);">
             <h3 style="margin:0 0 12px 0; color:var(--text-main, #1e293b);">当前阶段：{current_phase}</h3>
             <table style="width:100%; border-collapse:collapse; font-size:clamp(12px,1.5vw,14px);">
                 <tr style="background:#4f46e5; color:#fff;">
@@ -7292,9 +7229,11 @@ with left_col:
     st.markdown("### 👤 当前用户")
     st.markdown(f"**{st.session_state.get('username','?')}**")
     if st.button("🚪 退出登录", use_container_width=True):
-        revoke_login_session(cookie_manager.get("auth_token"))
+        clear_login_token(st.session_state.get("user_id", 0))
         cookie_manager.delete("auth_token")
-        clear_user_session_state()
+        st.session_state.logged_in = False
+        st.session_state.user_id = None
+        st.session_state.page = "hub"
         st.rerun()
 
     st.markdown("---")
@@ -7502,7 +7441,7 @@ with mid_col:
                     # 立即验证 DB 写入
                     vconn = sqlite3.connect(MEMORY_DB)
                     vc = vconn.cursor()
-                    uid = require_authenticated_user_id()
+                    uid = st.session_state.get("user_id", 1)
                     vc.execute("SELECT knowledge_id, status FROM knowledge_mastery WHERE knowledge_id=? AND user_id=?", (matched[0], uid))
                     verify = vc.fetchone()
                     vconn.close()
@@ -7895,7 +7834,7 @@ with tab4:
     # 历史记录
     st.markdown("---")
     st.markdown("### 📜 历史记录")
-    feynman_history = get_feynman_history(require_authenticated_user_id())
+    feynman_history = get_feynman_history(st.session_state.get("user_id", 1))
     if feynman_history:
         for record in feynman_history:
             mode_label = "概念" if record["mode"] == "concept" else "解题"
@@ -7914,7 +7853,7 @@ with tab3:
     st.subheader("知识点掌握情况")
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
-    c.execute("SELECT knowledge_id, status, times_correct, times_wrong, stability FROM knowledge_mastery WHERE user_id=? ORDER BY last_review DESC", (require_authenticated_user_id(),))
+    c.execute("SELECT knowledge_id, status, times_correct, times_wrong, stability FROM knowledge_mastery WHERE user_id=? ORDER BY last_review DESC", (st.session_state.get("user_id", 1),))
     rows = c.fetchall()
     conn.close()
     filtered_rows = [r for r in rows if r[0] in filtered_corpus_ids]

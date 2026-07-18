@@ -48,6 +48,7 @@ class RagKnowledgeBaseProfile:
     enabled: bool = False
     max_points: int = 12
     extraction_guidance: str = ""
+    exam_subjects: list[str] = field(default_factory=list)
 
 
 def _read_config(path: Path, *, tolerate_errors: bool) -> list[dict[str, Any]]:
@@ -189,6 +190,11 @@ def _normalize_subject_profile(raw_profile: Mapping[str, Any]) -> dict[str, Any]
         "extraction_guidance": _optional_string(
             profile.get("extraction_guidance"), "extraction_guidance"
         ),
+        "exam_subjects": [
+            str(item).strip()
+            for item in profile.get("exam_subjects", [])
+            if str(item).strip()
+        ] if isinstance(profile.get("exam_subjects", []), list) else [],
     }
 
 
@@ -252,6 +258,7 @@ def _to_rag_profile(profile: Mapping[str, Any]) -> RagKnowledgeBaseProfile:
         enabled=catalog["enabled"],
         max_points=profile["max_points"],
         extraction_guidance=profile["extraction_guidance"],
+        exam_subjects=list(profile.get("exam_subjects") or []),
     )
 
 
