@@ -12,7 +12,10 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 import json
 import base64
+import re
+import threading
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,6 +25,11 @@ from professional_knowledge.catalog import (
     list_rag_knowledge_bases,
     save_custom_subject_profile,
     set_subject_enabled,
+)
+from professional_knowledge.builtin_408 import (
+    BUILTIN_408_SOURCE_TYPE,
+    ensure_builtin_408_points,
+    is_408_subject,
 )
 from professional_knowledge.wrong_question_ui import render_wrong_question_workspace
 from repositories.knowledge_repo import (
@@ -40,7 +48,21 @@ from repositories.material_repo import (
     save_extraction_result,
     save_workflow_snapshot,
 )
-from repositories.wrong_question_repo import bulk_create_wrong_questions, count_user_wrong_questions
+from repositories.professional_learning_repo import (
+    ensure_memory_rows,
+    list_saved_questions,
+    list_memory_states,
+    list_recent_study_records,
+    mark_saved_question_practiced,
+    record_study_result,
+    save_generated_question,
+    set_review_due_now,
+)
+from repositories.professional_syllabus_repo import (
+    create_syllabus_analysis,
+    get_latest_syllabus_analysis,
+)
+from repositories.wrong_question_repo import count_user_wrong_questions
 from schemas.knowledge_schema import (
     has_meaningful_knowledge_content,
     knowledge_point_to_dict,
@@ -56,6 +78,8 @@ from services.adaptive_ocr_service import (
 )
 from services.pdf_outline_service import extract_pdf_outline_adaptively
 from services.llm_gateway import simple_prompt_completion
+from services.professional_syllabus_analysis_service import run_syllabus_analysis_job
+from services.web_supplement_service import build_web_supplement_prompt, search_web
 from services.knowledge_json_extractor import extract_knowledge_points_as_drafts
 from services.local_material_source_service import (
     get_local_material_root,
@@ -77,9 +101,12 @@ from services.professional_knowledge_task_service import (
     update_task_status as update_professional_task_status,
 )
 
+_CHAT_JOB_LOCK = threading.Lock()
+_CHAT_JOBS = {}
+
 # ==================== 配置（从环境变量读取） ====================
 MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
-API_KEY = os.environ.get("AI_API_KEY", "sk-cg6cwgbricj887hfgtl7zmytlrj4mj4thpf5qnpln749vx08").strip()
+API_KEY = os.environ.get("AI_API_KEY", "")
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
@@ -158,14 +185,67 @@ def ensure_db():
 
 # ==================== LLM 辅助 ====================
 
-def _call_llm_api(prompt, model="mimo-v2.5", max_tokens=1500):
+def _call_llm_api(prompt, model=None, max_tokens=1500, temperature=0.3):
     return simple_prompt_completion(
         prompt,
         model=model,
         max_tokens=max_tokens,
-        temperature=0.3,
-        timeout=90,
+        temperature=temperature,
+        timeout=240,
+        retries=1,
     )
+
+
+def _format_llm_error(exc):
+    message = str(exc or "").strip()
+    if "timed out" in message.lower() or "timeout" in message.lower():
+        return "大模型响应超时，通常是本次资料太长或接口网络慢。资料已经保存，可以稍后重试，或先减少勾选资料范围。"
+    return f"暂时无法调用大模型：{message or type(exc).__name__}"
+
+
+def _clean_assistant_answer(text):
+    raw = str(text or "").strip()
+    lines = raw.splitlines()
+    noisy_prefixes = (
+        "我们被问到",
+        "我们需要",
+        "我们可以",
+        "我将",
+        "用户问",
+        "用户问题",
+        "回答要求",
+        "好的",
+        "收到",
+        "下面是",
+        "根据您",
+        "根据你",
+        "作为",
+        "现在开始",
+        "注意",
+        "考虑到",
+        "这里",
+    )
+    noisy_markers = (
+        "用户问题",
+        "回答要求",
+        "不要展示思考过程",
+        "不要因为篇幅",
+        "来源不足",
+        "现在开始写",
+        "我们需要基于",
+        "我们可以这样写",
+        "考虑到这是文字回答",
+    )
+    while lines and (
+        any(lines[0].strip().startswith(prefix) for prefix in noisy_prefixes)
+        or any(marker in lines[0] for marker in noisy_markers)
+    ):
+        lines.pop(0)
+    cleaned = "\n".join(lines).strip()
+    cleaned = re.sub(r"^因此[，,]\s*", "", cleaned)
+    cleaned = re.sub(r"[（(]?\s*\[?来源\s*\d+(?:[，,、；;:：\s]*第?\s*\d+\s*页?)?[^\]\n）)]*\]?\s*[）)]?", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned or raw
 
 
 # ==================== PDF / 图片 / OCR ====================
@@ -282,7 +362,7 @@ def extract_knowledge_from_text(content, subject, chapter_name):
 
 内容：
 {content[:3000]}"""
-    return _call_llm_api(prompt, model="mimo-v2.5", max_tokens=1500)
+    return _call_llm_api(prompt, max_tokens=1500)
 
 
 def generate_review_expansion(point):
@@ -299,7 +379,7 @@ def generate_review_expansion(point):
 当前条目：
 {json.dumps(point, ensure_ascii=False, indent=2)}
 """
-    return _call_llm_api(prompt, model="mimo-v2.5", max_tokens=1600)
+    return _clean_assistant_answer(_call_llm_api(prompt, max_tokens=1600))
 
 
 # ==================== 数据库操作 ====================
@@ -317,8 +397,8 @@ def save_knowledge_points(user_id, material_id, subject, chapter_name, llm_resul
             VALUES (?, ?, ?, ?, ?, ?)""",
             (user_id, material_id, subject, chapter_name, name_kb, llm_result))
         count += 1
-    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=? AND user_id=?",
-             (count, material_id, user_id))
+    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=?",
+             (count, material_id))
     conn.commit()
     conn.close()
     return count
@@ -370,18 +450,18 @@ def add_wrong_question(user_id, subject, question, user_answer, correct_answer, 
     conn.close()
 
 
-def mark_wrong_mastered(user_id, question_id):
+def mark_wrong_mastered(question_id):
     """标记错题已掌握"""
     conn = sqlite3.connect(MEMORY_DB)
-    conn.execute("UPDATE user_wrong_questions SET status='mastered' WHERE id=? AND user_id=?", (question_id, user_id))
+    conn.execute("UPDATE user_wrong_questions SET status='mastered' WHERE id=?", (question_id,))
     conn.commit()
     conn.close()
 
 
-def relearn_wrong(user_id, question_id):
+def relearn_wrong(question_id):
     """重新学习错题"""
     conn = sqlite3.connect(MEMORY_DB)
-    conn.execute("UPDATE user_wrong_questions SET last_reviewed=datetime('now') WHERE id=? AND user_id=?", (question_id, user_id))
+    conn.execute("UPDATE user_wrong_questions SET last_reviewed=datetime('now') WHERE id=?", (question_id,))
     conn.commit()
     conn.close()
 
@@ -905,9 +985,32 @@ def _show_pending_toast():
     if not payload:
         return
     if isinstance(payload, str):
-        st.toast(payload)
-        return
-    st.toast(payload.get("message", "操作完成"), icon=payload.get("icon"))
+        message = payload
+        icon = "✅"
+    else:
+        message = payload.get("message", "操作完成")
+        icon = payload.get("icon", "✅")
+    st.markdown(
+        f"""
+        <div class="pk-floating-toast">
+            <span class="pk-floating-toast-icon">{_escape_html(icon)}</span>
+            <span>{_escape_html(message)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _show_inline_job_notice(message):
+    st.markdown(
+        f"""
+        <div class="pk-inline-job-notice">
+            <span class="pk-inline-spinner"></span>
+            <span>{_escape_html(message)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _queue_toast(message, icon="✅"):
@@ -948,7 +1051,7 @@ def _extract_drafts_with_progress(
                 subject=subject,
                 chapter_name=chapter_name,
                 max_points=max_points,
-                llm_callable=lambda prompt: _call_llm_api(prompt, model="mimo-v2.5", max_tokens=4000),
+                llm_callable=lambda prompt: _call_llm_api(prompt, max_tokens=4000),
                 progress_callback=update_progress,
                 extraction_guidance=extraction_guidance,
             )
@@ -1092,10 +1195,7 @@ def _format_repo_option(point):
 
 def _render_knowledge_page_legacy():
     """渲染专业知识库页面（4 个 Tab）"""
-    user_id = st.session_state.get("user_id")
-    if not isinstance(user_id, int):
-        st.error("登录状态失效，请重新登录后访问知识库。")
-        st.stop()
+    user_id = st.session_state.get("user_id", 1)
     _ensure_session_draft_state()
     _ensure_persist_state()
 
@@ -1482,11 +1582,11 @@ def _render_knowledge_page_legacy():
                     c1, c2 = st.columns(2)
                     with c1:
                         if st.button("✅ 标记已掌握", key=f"wrong_{wq[0]}"):
-                            mark_wrong_mastered(user_id, wq[0])
+                            mark_wrong_mastered(wq[0])
                             st.rerun()
                     with c2:
                         if st.button("🔄 重新学习", key=f"relearn_{wq[0]}"):
-                            relearn_wrong(user_id, wq[0])
+                            relearn_wrong(wq[0])
                             st.rerun()
         else:
             st.info("🎉 当前学科没有错题！")
@@ -1547,7 +1647,7 @@ C) 选项C
 D) 选项D
 ANSWER: 正确选项
 EXPLAIN: 解析"""
-                        result = _call_llm_api(quiz_prompt, model="mimo-v2.5", max_tokens=1000)
+                        result = _call_llm_api(quiz_prompt, max_tokens=1000)
                         st.markdown("---")
                         st.markdown("### 生成结果")
                         st.markdown(result)
@@ -1809,18 +1909,28 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
                         st.rerun()
 
 
-def _render_private_repository(user_id, subject=None, show_study_tools=True):
+def _render_private_repository(user_id, subject=None, show_study_tools=True, include_builtin=False):
     conn = sqlite3.connect(MEMORY_DB)
     try:
         points = list_user_knowledge_points(conn, user_id, limit=200, subject=subject)
     finally:
         conn.close()
+    if not include_builtin:
+        points = [
+            point for point in points
+            if point.get("source_type") != BUILTIN_408_SOURCE_TYPE
+        ]
 
     if not points:
+        empty_text = (
+            "这里暂时没有来自上传资料的知识条目。下方 408 内置学习库可以直接学习；上传自己学校的考纲或课程资料后，整理出的条目会出现在这里。"
+            if is_408_subject(subject)
+            else "当前专业课的知识库为空。上传资料后，系统会自动整理专业知识、心得、经验和方法策略。"
+        )
         st.markdown(
-            """
+            f"""
             <div class="pk-empty-state">
-                当前专业课的知识库为空。上传资料后，系统会自动整理专业知识、心得、经验和方法策略。
+                {_escape_html(empty_text)}
             </div>
             """,
             unsafe_allow_html=True,
@@ -1905,8 +2015,8 @@ def _render_private_repository(user_id, subject=None, show_study_tools=True):
             ),
             metrics=[
                 ("学科", point.get("subject") or "未分类"),
-                ("章节", point.get("chapter_name") or "未标注"),
-                ("页码", point.get("source_page") or "未知"),
+                ("考试科目", _point_exam_subject(point)),
+                ("来源", point.get("material_filename") or point.get("source_type") or "知识库"),
                 ("状态", point.get("mastery_state") or "待复习"),
             ],
             kicker="当前条目",
@@ -2436,26 +2546,56 @@ def _render_subject_setup_wizard(form_key="create_custom_subject_v1", *, wrap_ex
         else st.container()
     )
     with wrapper:
-        st.caption("只填专业课名称就能使用；考试代码、资料文件夹和抽取重点都可以留空，之后再补。")
-        with st.form(form_key):
-            subject_label = st.text_input("专业课名称 *", placeholder="例如：管理学原理")
-            exam_code = st.text_input("考试代码（可选）", placeholder="例如：803")
-            local_root = st.text_input(
-                "本地资料文件夹（可选）",
-                placeholder=r"例如：D:\考研资料\803管理学",
+        st.caption("一门专业课对应一个知识库。先写清这门专业课考哪些科目，后面知识库会按这些科目筛选。")
+        count_key = f"{form_key}_exam_subject_count"
+        st.session_state.setdefault(count_key, 1)
+        subject_label = st.text_input("专业课名称", placeholder="例如：管理学原理", key=f"{form_key}_subject_label")
+        st.markdown("**所考科目**")
+        st.caption("先默认 1 个科目；多科目可以继续新增。408 填四门：数据结构、计算机组成原理、操作系统、计算机网络。")
+        subject_count = int(st.session_state.get(count_key) or 1)
+        for index in range(subject_count):
+            st.text_input(
+                f"科目 {index + 1}",
+                placeholder="例如：数据结构" if index == 0 else "例如：计算机组成原理",
+                key=f"{form_key}_exam_subject_{index}",
             )
-            extraction_guidance = st.text_area(
-                "希望系统重点识别什么（可选）",
-                placeholder="例如：优先识别理论流派、代表人物、核心观点、适用条件和易混点。",
-                height=90,
-            )
-            submitted = st.form_submit_button("创建并开始导入资料", use_container_width=True, type="primary")
+        add_col, remove_col = st.columns(2)
+        with add_col:
+            if st.button("新增科目", key=f"{form_key}_add_exam_subject", use_container_width=True):
+                st.session_state[count_key] = min(12, subject_count + 1)
+                st.rerun()
+        with remove_col:
+            if st.button(
+                "删除最后一个科目",
+                key=f"{form_key}_remove_exam_subject",
+                use_container_width=True,
+                disabled=subject_count <= 1,
+            ):
+                st.session_state.pop(f"{form_key}_exam_subject_{subject_count - 1}", None)
+                st.session_state[count_key] = max(1, subject_count - 1)
+                st.rerun()
+        exam_code = st.text_input("考试代码（可选）", placeholder="例如：803", key=f"{form_key}_exam_code")
+        extraction_guidance = st.text_area(
+            "希望系统重点识别什么（可选）",
+            placeholder="例如：优先识别理论流派、代表人物、核心观点、适用条件和易混点。",
+            height=90,
+            key=f"{form_key}_extraction_guidance",
+        )
+        submitted = st.button("创建并开始导入资料", key=f"{form_key}_submit", use_container_width=True, type="primary")
 
         if not submitted:
             return
         clean_label = subject_label.strip()
         if not clean_label:
             st.warning("请先填写专业课名称。")
+            return
+        exam_subjects = []
+        for index in range(int(st.session_state.get(count_key) or 1)):
+            item = str(st.session_state.get(f"{form_key}_exam_subject_{index}") or "").strip()
+            if item and item not in exam_subjects:
+                exam_subjects.append(item)
+        if not exam_subjects:
+            st.warning("请填写这门专业课所考的科目，知识库会按这些科目分类。")
             return
         existing_profile = get_rag_knowledge_base_by_subject(clean_label)
         if existing_profile is not None:
@@ -2465,26 +2605,9 @@ def _render_subject_setup_wizard(form_key="create_custom_subject_v1", *, wrap_ex
             _queue_toast(f"“{clean_label}”已经存在，已为你选中")
             st.rerun()
 
-        resolved_root = ""
-        if local_root.strip():
-            candidate = Path(local_root.strip()).expanduser()
-            if not candidate.exists() or not candidate.is_dir():
-                st.warning("本地资料文件夹不存在，请检查路径；也可以先留空，创建后直接上传资料。")
-                return
-            resolved_root = str(candidate.resolve())
-
         profile_key = f"custom_{uuid4().hex[:10]}"
         clean_code = exam_code.strip()
         title = f"{clean_code} {clean_label}".strip()
-        local_source = None
-        if resolved_root:
-            local_source = {
-                "key": profile_key,
-                "title": f"本地{clean_label}资料",
-                "tab_label": "本地资料库",
-                "root_env_var": f"{profile_key.upper()}_ROOT",
-                "fallback_dir_name": resolved_root,
-            }
         try:
             save_custom_subject_profile(
                 {
@@ -2500,9 +2623,13 @@ def _render_subject_setup_wizard(form_key="create_custom_subject_v1", *, wrap_ex
                         "notes": "由页面向导创建，可继续通过配置文件调整抽取重点。",
                         "enabled": True,
                     },
-                    "local_source": local_source,
+                    "local_source": None,
                     "max_points": 12,
-                    "extraction_guidance": extraction_guidance.strip(),
+                    "exam_subjects": exam_subjects,
+                    "extraction_guidance": (
+                        extraction_guidance.strip()
+                        or f"按所考科目分类整理：{'、'.join(exam_subjects)}。优先抽取每个科目的核心概念、原理、方法、条件、考法和易错点。"
+                    ),
                 }
             )
         except (OSError, ValueError, RuntimeError) as exc:
@@ -2856,7 +2983,7 @@ def _render_legacy_knowledge_page(*, show_header=True, show_subject_setup=True):
             """
             <div class="pk-section-heading">
                 <h2>我的知识库与复习</h2>
-                <p>检索已入库知识点，查看原文依据，维护掌握状态，并为后续 RAG 和关系图保留稳定的数据入口。</p>
+                <p>检索已入库知识点，维护掌握状态，并为后续 RAG 和关系图保留稳定的数据入口。</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -2920,6 +3047,27 @@ def _inject_professional_workbench_styles():
         }
         .pk-learning-banner h1 { margin: 0 !important; color: #fff !important; font-size: 1.48rem !important; letter-spacing: -.02em; }
         .pk-learning-banner p { margin: .25rem 0 0; color: rgba(255,255,255,.82) !important; font-size: .84rem; }
+        .pk-start-guide {
+            background: linear-gradient(135deg, #e0f2fe 0%, #bfdbfe 100%);
+            border: 1px solid #93c5fd;
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin: 0 0 16px;
+            box-shadow: 0 8px 24px rgba(37, 99, 235, .08);
+        }
+        .pk-start-guide-title {
+            color: #075985;
+            font-size: .92rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        .pk-start-guide-body {
+            color: #1e40af;
+            font-size: .84rem;
+            line-height: 1.8;
+        }
+        .pk-start-guide-body p { margin: 0 0 8px; }
+        .pk-start-guide-body p:last-child { margin-bottom: 0; }
         .pk-workbench-label { color: #101828; font-size: .9rem; font-weight: 700; margin-bottom: .35rem; }
         .pk-source-heading { color: #172033; font-size: .92rem; font-weight: 700; margin: .15rem 0 .65rem; }
         .pk-chat-hero { min-height: 142px; display: flex; flex-direction: column; justify-content: center; padding: 1.35rem 1.55rem; border: 1px solid #e2e7ef; border-radius: 18px; background: #fff; }
@@ -2927,6 +3075,136 @@ def _inject_professional_workbench_styles():
         .pk-chat-hero h2 { margin: 0; color: #17191f; font-size: 1.58rem; letter-spacing: -.025em; }
         .pk-chat-hero p { margin: .58rem 0 0; color: #344054; line-height: 1.75; font-size: .91rem; max-width: 760px; }
         .pk-source-count { color: #667085; font-size: .78rem; margin: .2rem 0 .7rem; }
+        .pk-syllabus-panel {
+            margin: 4px 0 18px;
+            padding: 16px 18px;
+            border: 1px solid #dbe4ef;
+            border-radius: 14px;
+            background: #ffffff;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, .04);
+        }
+        .pk-syllabus-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+        .pk-syllabus-title h3 {
+            margin: 0;
+            color: #172033;
+            font-size: 1rem;
+            letter-spacing: 0;
+        }
+        .pk-syllabus-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: #4338ca;
+            font-size: .74rem;
+            font-weight: 700;
+        }
+        .pk-syllabus-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .pk-syllabus-mini {
+            padding: 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            background: #f8fafc;
+            min-height: 96px;
+        }
+        .pk-syllabus-mini strong { display: block; margin-bottom: 6px; color: #1e293b; font-size: .86rem; }
+        .pk-syllabus-mini p { margin: 0; color: #475569; font-size: .78rem; line-height: 1.55; }
+        .pk-library-count {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 9px 0 12px;
+            margin-bottom: 14px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #1e293b;
+            font-size: .88rem;
+            font-weight: 600;
+        }
+        .pk-library-count strong { color: #4f46e5; }
+        .pk-knowledge-row {
+            padding: 15px 18px;
+            margin: 0 0 10px;
+            border: 1px solid #bae6fd;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+            color: #0369a1;
+            font-size: .92rem;
+            font-weight: 650;
+            line-height: 1.45;
+        }
+        .pk-knowledge-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 5px;
+            color: #475569;
+            font-size: .74rem;
+            font-weight: 400;
+        }
+        .pk-study-panel {
+            padding: 16px 18px;
+            margin: 4px 0 16px;
+            border-left: 3px solid #4f46e5;
+            background: #f8fafc;
+        }
+        .pk-memory-row {
+            display: grid;
+            grid-template-columns: minmax(180px, 1fr) 100px 120px;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 0;
+            border-bottom: 1px solid #e8edf3;
+            color: #1e293b;
+            font-size: .84rem;
+        }
+        .pk-memory-row:last-child { border-bottom: 0; }
+        .pk-memory-score { color: #4f46e5; font-weight: 700; }
+        .pk-memory-progress {
+            margin: 14px 0 16px;
+            padding: 12px 14px;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            background: #f8fafc;
+        }
+        .pk-memory-progress-top {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+            color: #334155;
+            font-size: .82rem;
+            font-weight: 650;
+        }
+        .pk-memory-progress-track {
+            height: 10px;
+            border-radius: 999px;
+            background: #eaf0f6;
+            overflow: hidden;
+        }
+        .pk-memory-progress-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #38bdf8 0%, #34d399 100%);
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,.28);
+        }
+        .pk-memory-progress-note {
+            margin-top: 7px;
+            color: #64748b;
+            font-size: .76rem;
+        }
+        div[data-testid="stTabs"] button[role="tab"] { font-size: .88rem; padding-left: 16px; padding-right: 16px; }
         .st-key-workbench_source_files_v1 [data-testid="stFileUploaderDropzoneInstructions"] span {
             font-size: 0 !important;
         }
@@ -2962,6 +3240,68 @@ def _inject_professional_workbench_styles():
         }
         div[data-testid="stVerticalBlockBorderWrapper"] { border-color: #e2e7ef; border-radius: 18px; box-shadow: none; }
         div[data-testid="stChatMessage"] { border: 1px solid #e8ecf2; background: #fff; border-radius: 14px; padding: .15rem .35rem; }
+        @keyframes pkInlineSpin {
+            to { transform: rotate(360deg); }
+        }
+        @keyframes pkToastSlowFade {
+            0% { opacity: 0; transform: translateY(-4px); }
+            12% { opacity: 1; transform: translateY(0); }
+            72% { opacity: 1; transform: translateY(0); }
+            100% { opacity: 0; transform: translateY(-8px); }
+        }
+        .pk-floating-toast {
+            position: fixed;
+            top: 16px;
+            right: 18px;
+            z-index: 999999;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            max-width: 360px;
+            padding: 12px 14px;
+            border: 1px solid #dbe4ef;
+            border-radius: 10px;
+            background: rgba(255,255,255,.96);
+            box-shadow: 0 14px 30px rgba(15,23,42,.12);
+            color: #1e293b;
+            font-size: .86rem;
+            line-height: 1.55;
+            animation: pkToastSlowFade 6.8s ease-in-out forwards;
+            pointer-events: none;
+        }
+        .pk-floating-toast-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 7px;
+            background: #ecfdf5;
+            color: #059669;
+            font-size: .9rem;
+            flex: 0 0 auto;
+        }
+        .pk-inline-job-notice {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            padding: 7px 10px;
+            border: 1px solid #e2e8f0;
+            border-radius: 999px;
+            background: #fff;
+            color: #64748b;
+            font-size: .8rem;
+            line-height: 1;
+        }
+        .pk-inline-spinner {
+            width: 14px;
+            height: 14px;
+            border-radius: 999px;
+            border: 2px solid #dbeafe;
+            border-top-color: #38bdf8;
+            animation: pkInlineSpin .78s linear infinite;
+        }
         button[kind="primary"], button[kind="primaryFormSubmit"] { background: #4f46e5 !important; border-color: #4f46e5 !important; color: #fff !important; }
         button[kind="primary"]:hover, button[kind="primaryFormSubmit"]:hover { background: #4338ca !important; border-color: #4338ca !important; }
         input[type="checkbox"] { accent-color: #4f46e5; }
@@ -2969,6 +3309,9 @@ def _inject_professional_workbench_styles():
             .pk-chat-hero { min-height: auto; }
             .pk-learning-banner { padding: 1.1rem 1.2rem; border-radius: 16px; }
             .pk-learning-banner h1 { font-size: 1.3rem !important; }
+            .pk-start-guide { padding: 15px 16px; }
+            .pk-syllabus-grid { grid-template-columns: 1fr; }
+            .pk-memory-row { grid-template-columns: 1fr; gap: 4px; }
         }
         </style>
         """,
@@ -2996,51 +3339,14 @@ def _list_subject_sources(user_id, subject):
         conn.close()
 
 
-def _parse_qa_pairs_from_expansion(content: str) -> list[dict[str, str]]:
-    """Extract Q/A pairs from the 复习问答 section of AI expansion content."""
-    import re
-
-    if not content:
-        return []
-
-    # Locate the 复习问答 section — match heading or bold title, capture until next section heading or EOF
-    qa_section_match = re.search(
-        r"(?:^|\n)(?:#{1,4}\s*)?\*{0,2}复习问答[：:]?\*{0,2}\s*\n+(.*?)(?=\n+#{1,4}\s|\n+\*{0,2}(?:核心解释|关联知识|常见考法|易错提醒|复习问答)\*{0,2}|\Z)",
-        content,
-        re.DOTALL,
-    )
-    if not qa_section_match:
-        return []
-
-    qa_text = qa_section_match.group(1).strip()
-    if not qa_text:
-        return []
-
-    # Strip bold/strong markers to simplify matching
-    qa_clean = re.sub(r"\*{1,2}", "", qa_text)
-
-    pairs: list[dict[str, str]] = []
-    # Match Q/A pairs: "Q1: ...\nA1: ..." or "Q：...\nA：..."
-    qa_pattern = re.compile(
-        r"Q\d*[：:]\s*(.+?)\s*\n\s*A\d*[：:]\s*(.+?)(?=\n\s*Q\d*[：:]|\Z)",
-        re.DOTALL,
-    )
-    for match in qa_pattern.finditer(qa_clean):
-        question = match.group(1).strip()
-        answer = match.group(2).strip()
-        if question and answer:
-            pairs.append({"question": question, "answer": answer})
-
-    return pairs
-
-
 def _render_repository_ai_tools(point):
     """Render visible per-item AI expansion controls with preview-before-save."""
     knowledge_id = point.get("id")
     draft_key = f"expansion_draft_{knowledge_id}"
+    web_key = f"web_supplement_{knowledge_id}"
     stored_expansion = point.get("review_content") or ""
 
-    ai_col, learning_col, mastered_col = st.columns([1.6, 1, 1])
+    ai_col, web_col, learning_col, mastered_col = st.columns([1.35, 1.1, 1, 1])
     with ai_col:
         generate_label = "重新 AI 发散" if stored_expansion else "AI 发散当前条目"
         if st.button(
@@ -3054,69 +3360,68 @@ def _render_repository_ai_tools(point):
                     st.session_state[draft_key] = generate_review_expansion(point)
                 except Exception as exc:
                     st.error(f"AI 发散失败：{exc}")
+    with web_col:
+        if st.button("联网补充", key=f"web_expand_{knowledge_id}", use_container_width=True):
+            try:
+                query = f"{point.get('knowledge_name') or ''} 考研 408 知识点"
+                results = search_web(query, limit=5)
+                if not results:
+                    st.session_state[web_key] = {
+                        "summary": "没有搜到可用结果。可以换个关键词，或先以教材/考纲为准。",
+                        "results": [],
+                    }
+                elif os.environ.get("AI_API_KEY", "").strip():
+                    summary = _clean_assistant_answer(
+                        _call_llm_api(
+                            build_web_supplement_prompt(point, results),
+                            max_tokens=1400,
+                        )
+                    )
+                    st.session_state[web_key] = {"summary": summary, "results": results}
+                else:
+                    bullets = "\n".join(
+                        f"- [网页{index}] {item.get('title')}：{item.get('snippet') or item.get('url')}"
+                        for index, item in enumerate(results, start=1)
+                    )
+                    st.session_state[web_key] = {
+                        "summary": f"联网补充搜索结果如下，未配置大模型时先展示原始摘要：\n\n{bullets}",
+                        "results": results,
+                    }
+            except Exception as exc:
+                st.session_state[web_key] = {
+                    "summary": f"{exc}",
+                    "results": [],
+                }
     with learning_col:
         if st.button("标记学习中", key=f"learning_{knowledge_id}", use_container_width=True):
             _update_knowledge_mastery(knowledge_id, "学习中")
+            _queue_toast("已标记为学习中")
             st.rerun()
     with mastered_col:
         if st.button("标记已掌握", key=f"mastered_{knowledge_id}", use_container_width=True):
             _update_knowledge_mastery(knowledge_id, "已掌握")
+            _queue_toast("已标记为已掌握")
             st.rerun()
 
     draft_expansion = st.session_state.get(draft_key)
-    expansion_content = draft_expansion or stored_expansion
+    web_supplement = st.session_state.get(web_key)
+    if web_supplement:
+        st.markdown("**联网补充预览**")
+        st.caption("这部分来自用户手动联网搜索，不会自动写入核心知识库；用于拓展理解，仍需回教材和学校考纲核对。")
+        st.markdown(web_supplement.get("summary") or "")
+        results = web_supplement.get("results") or []
+        if results:
+            with st.expander("查看网页来源", expanded=False):
+                for index, item in enumerate(results, start=1):
+                    st.markdown(f"[网页{index}] [{item.get('title')}]({item.get('url')})")
+                    if item.get("snippet"):
+                        st.caption(item.get("snippet"))
+        if st.button("收起联网补充", key=f"discard_web_supplement_{knowledge_id}", use_container_width=True):
+            st.session_state.pop(web_key, None)
+            st.rerun()
     if draft_expansion:
         st.markdown("**AI 发散预览**")
         st.markdown(draft_expansion)
-    elif stored_expansion:
-        st.markdown("**已保存的 AI 发散内容**")
-        if point.get("review_generated_at"):
-            st.caption(f"生成时间：{point.get('review_generated_at')}")
-        st.markdown(stored_expansion)
-
-    # ── 复习问答 → 错题本 ──
-    if expansion_content:
-        qa_pairs = _parse_qa_pairs_from_expansion(expansion_content)
-        if qa_pairs:
-            st.markdown("---")
-            st.caption("📋 复习问答 · 点击下方按钮将题目添加到错题本")
-            for i, qa in enumerate(qa_pairs):
-                st.markdown(
-                    f"**Q{i + 1}：**{qa['question']}\n\n"
-                    f"**A{i + 1}：**{qa['answer']}"
-                )
-                if st.button(
-                    "添加到错题本",
-                    key=f"add_qa_wrong_{knowledge_id}_{i}",
-                    use_container_width=True,
-                ):
-                    user_id = st.session_state.get("user_id", 1)
-                    subject = point.get("subject") or ""
-                    chapter_name = point.get("chapter_name") or ""
-                    knowledge_name = point.get("knowledge_name") or ""
-                    bulk_create_wrong_questions(
-                        user_id,
-                        [
-                            {
-                                "question": qa["question"],
-                                "correct_answer": qa["answer"],
-                                "user_answer": "",
-                                "explanation": f"来源：{knowledge_name}（{chapter_name}）\n\n{qa['answer']}",
-                                "subject": subject,
-                                "chapter_name": chapter_name,
-                                "tags": [knowledge_name, "AI发散复习问答"],
-                                "source_text": "",
-                                "source_filename": "",
-                                "source_file_type": "",
-                            }
-                        ],
-                    )
-                    st.toast(f"已添加复习题 Q{i + 1} 到错题本", icon="✅")
-                    import time
-                    time.sleep(0.8)
-                    st.rerun()
-
-    if draft_expansion:
         save_col, discard_col = st.columns(2)
         with save_col:
             if st.button(
@@ -3136,6 +3441,11 @@ def _render_repository_ai_tools(point):
             ):
                 st.session_state.pop(draft_key, None)
                 st.rerun()
+    elif stored_expansion:
+        st.markdown("**已保存的 AI 发散内容**")
+        if point.get("review_generated_at"):
+            st.caption(f"生成时间：{point.get('review_generated_at')}")
+        st.markdown(stored_expansion)
 
 
 def _delete_subject_source(user_id, material_id):
@@ -3180,7 +3490,7 @@ def _auto_index_material(user_id, result, *, replace_existing=False):
         max_points = min(48, max(configured_max_points, max(24, round(outline_items / 4))))
 
     def llm_callable(prompt):
-        if not API_KEY:
+        if not os.environ.get("AI_API_KEY", "").strip():
             raise RuntimeError("未配置 AI_API_KEY，使用本地规则整理")
         return _call_llm_api(prompt, max_tokens=6400 if is_syllabus_outline else 2600)
 
@@ -3328,6 +3638,271 @@ def _process_workbench_uploads(user_id, subject, uploaded_files):
     return processed, indexed, warnings
 
 
+def _create_workbench_upload_job(user_id, subject, uploaded_file, *, chapter_name=None):
+    safe_filename = _sanitize_material_filename(uploaded_file.name)
+    file_bytes = uploaded_file.getvalue()
+    chapter_name = chapter_name or Path(safe_filename).stem
+    file_type = _infer_material_file_type(safe_filename)
+    file_path = _persist_user_material_file(user_id, safe_filename, file_bytes)
+    subject_profile = get_rag_knowledge_base_by_subject(subject)
+    subject_key = subject_profile.key if subject_profile else ""
+    source_hash = hashlib.sha256(file_bytes).hexdigest() if file_bytes else ""
+
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        material = create_material(
+            conn,
+            user_id=user_id,
+            subject=subject,
+            subject_key=subject_key,
+            filename=safe_filename,
+            chapter_name=chapter_name,
+            file_path=file_path,
+            file_type=file_type,
+            content_hash=source_hash,
+            processing_status="pending",
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        _remove_local_material_file(file_path)
+        raise
+    finally:
+        conn.close()
+
+    task = create_professional_task(
+        user_id=user_id,
+        subject=subject,
+        chapter_name=chapter_name,
+        filename=safe_filename,
+        material_id=material["id"],
+    )
+    return {
+        "material_id": material["id"],
+        "task_id": task.task_id,
+        "subject": subject,
+        "chapter_name": chapter_name,
+        "filename": safe_filename,
+        "file_path": file_path,
+        "file_type": file_type,
+        "source_hash": source_hash,
+    }
+
+
+def _process_workbench_upload_job(job):
+    task_id = job.get("task_id") or ""
+    material_id = job.get("material_id")
+    file_path = job.get("file_path") or ""
+    filename = job.get("filename") or Path(file_path).name
+    file_type = job.get("file_type") or _infer_material_file_type(filename)
+    subject = job.get("subject") or ""
+    chapter_name = job.get("chapter_name") or Path(filename).stem
+    source_hash = job.get("source_hash") or ""
+
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        mark_material_status(conn, material_id, "processing")
+        conn.commit()
+    finally:
+        conn.close()
+    update_professional_task_status(task_id, "processing", note="后台开始识别资料")
+
+    path = Path(file_path)
+    file_bytes = None
+    if path.exists() and file_type != "pdf":
+        file_bytes = path.read_bytes()
+
+    def progress_callback(current, total, message):
+        update_professional_task_status(task_id, "processing", note=str(message or "")[:120])
+
+    try:
+        material_result = route_material_input(
+            file_name=filename,
+            file_path=file_path,
+            file_bytes=file_bytes,
+            image_ocr_fn=extract_text_from_image,
+            pdf_ocr_fn=lambda path_value: extract_text_from_pdf_paddleocr(
+                path_value,
+                progress_callback=progress_callback,
+            ),
+            pdf_outline_fn=lambda path_value: extract_pdf_outline_adaptively(
+                path_value,
+                progress_callback=progress_callback,
+            ),
+            pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()) if file_type == "pdf" else False,
+            pdf_text_progress_fn=progress_callback if file_type == "pdf" else None,
+        )
+        if file_type in {"png", "jpg", "jpeg"} and not (is_rapid_ocr_available() or is_paddle_ocr_available()):
+            message = "OCR 服务不可用。文字型 PDF 仍可直接提取；扫描型 PDF 或图片可能无法识别。"
+            if message not in material_result.warnings:
+                material_result.warnings.append(message)
+
+        conn = sqlite3.connect(MEMORY_DB)
+        try:
+            save_extraction_result(
+                conn,
+                material_id,
+                material_result,
+                status="extracted",
+                content_hash=source_hash,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        update_professional_task_status(
+            task_id,
+            "extracted",
+            note="资料识别完成，开始整理知识点",
+            source_type=material_result.source_type,
+            process_method=material_result.process_method,
+            warning_count=len(material_result.warnings or []),
+        )
+
+        result = {
+            "material_id": material_id,
+            "chapter_name": chapter_name,
+            "subject": subject,
+            "file_type": file_type,
+            "filename": filename,
+            "task_id": task_id,
+            "material_result": material_result,
+        }
+        saved_count, warnings = _auto_index_material(job.get("user_id"), result)
+        update_professional_task_status(
+            task_id,
+            "done",
+            note=f"后台整理完成，写入 {saved_count} 个知识点",
+            warning_count=len(warnings or []),
+            source_type=material_result.source_type,
+            process_method=material_result.process_method,
+        )
+    except Exception as exc:
+        conn = sqlite3.connect(MEMORY_DB)
+        try:
+            mark_material_status(conn, material_id, "failed", error_message=str(exc))
+            conn.commit()
+        finally:
+            conn.close()
+        update_professional_task_status(task_id, "failed", note=f"后台整理失败：{exc}")
+
+
+def _create_workbench_reprocess_job(user_id, source):
+    file_path = source.get("file_path") or ""
+    if not _is_local_user_material_path(file_path):
+        raise ValueError("原始文件不在用户资料目录中，无法重新整理。")
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError("原始文件已不存在，请重新上传。")
+
+    filename = source.get("filename") or path.name
+    chapter_name = source.get("chapter_name") or Path(filename).stem
+    file_type = source.get("file_type") or path.suffix.lower().lstrip(".")
+    task = create_professional_task(
+        user_id=user_id,
+        subject=source.get("subject") or "",
+        chapter_name=chapter_name,
+        filename=filename,
+        material_id=source["id"],
+    )
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        conn.execute(
+            "DELETE FROM user_knowledge WHERE user_id=? AND material_id=?",
+            (user_id, source["id"]),
+        )
+        mark_material_status(conn, source["id"], "pending")
+        conn.commit()
+    finally:
+        conn.close()
+    return {
+        "user_id": user_id,
+        "material_id": source["id"],
+        "task_id": task.task_id,
+        "subject": source.get("subject") or "",
+        "chapter_name": chapter_name,
+        "filename": filename,
+        "file_path": file_path,
+        "file_type": file_type,
+        "source_hash": source.get("content_hash") or "",
+    }
+
+
+def _start_workbench_upload_background(job):
+    thread = threading.Thread(
+        target=_process_workbench_upload_job,
+        args=(job,),
+        name=f"workbench-upload-{job.get('material_id')}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _queue_workbench_reprocess(user_id, source):
+    job = _create_workbench_reprocess_job(user_id, source)
+    _start_workbench_upload_background(job)
+    return job
+
+
+def _queue_workbench_uploads(user_id, subject, uploaded_files):
+    queued = 0
+    warnings = []
+    for uploaded_file in list(uploaded_files or []):
+        try:
+            job = _create_workbench_upload_job(user_id, subject, uploaded_file)
+            job["user_id"] = user_id
+            _start_workbench_upload_background(job)
+            queued += 1
+        except Exception as exc:
+            warnings.append(f"{getattr(uploaded_file, 'name', '资料')}：{exc}")
+    return queued, warnings
+
+
+def _queue_syllabus_upload(user_id, subject, uploaded_file):
+    base_name = Path(_sanitize_material_filename(uploaded_file.name)).stem
+    chapter_name = f"学校考纲 - {base_name}"
+    job = _create_workbench_upload_job(
+        user_id,
+        subject,
+        uploaded_file,
+        chapter_name=chapter_name,
+    )
+    job["user_id"] = user_id
+    _start_workbench_upload_background(job)
+    return job
+
+
+def _render_workbench_task_status(user_id, subject):
+    tasks = [
+        task for task in list_recent_tasks(user_id, limit=8)
+        if task.subject == subject
+    ][:4]
+    if not tasks:
+        return
+    active = any(task.status in {"pending", "processing", "extracted"} for task in tasks)
+    status_col, refresh_col = st.columns([0.7, 0.3], gap="small")
+    with status_col:
+        st.caption("后台整理状态")
+    with refresh_col:
+        if st.button(
+            "刷新",
+            key=f"refresh_workbench_tasks_{user_id}_{subject}",
+            use_container_width=True,
+            disabled=not active,
+        ):
+            st.rerun()
+    if active:
+        st.caption("资料会在后台继续整理，你可以先使用右侧问答和下方知识库。")
+    for task in tasks:
+        status_label = {
+            "pending": "排队中",
+            "processing": "识别中",
+            "extracted": "整理知识点",
+            "done": "已完成",
+            "failed": "失败",
+        }.get(task.status, task.status)
+        st.caption(f"{task.filename or task.chapter_name} · {status_label} · {task.updated_at}")
+
+
 def _source_status_label(source):
     status = source.get("processing_status") or "pending"
     if status in {"done", "completed"}:
@@ -3347,8 +3922,82 @@ def _source_status_label(source):
     return f"状态：{status}"
 
 
-def _answer_subject_question(user_id, subject, source_ids, question):
+def _answer_builtin_408_question(user_id, subject, question, answer_mode="custom"):
+    points = _load_professional_points(user_id, subject)
+    builtin_points = [
+        point for point in points
+        if point.get("source_type") == BUILTIN_408_SOURCE_TYPE
+    ]
+    if not builtin_points:
+        return "408 内置知识库暂时没有可用内容。"
+
+    query_terms = [
+        term.strip().lower()
+        for term in re.split(r"[\s，。；、,.!?！？:：()（）]+", question or "")
+        if len(term.strip()) >= 2
+    ]
+
+    def score(point):
+        haystack = _point_context(point, include_source=False).lower()
+        return sum(3 if term in str(point.get("knowledge_name") or "").lower() else 1 for term in query_terms if term in haystack)
+
+    ranked = sorted(
+        builtin_points,
+        key=lambda point: (score(point), point.get("review_priority") == "高"),
+        reverse=True,
+    )
+    if answer_mode in {"outline", "review", "exam"}:
+        selected = builtin_points[:80]
+    else:
+        selected = [point for point in ranked if score(point) > 0][:8] or ranked[:8]
+    source_blocks = [
+        f"[408内置知识点{index}：{point.get('knowledge_name')}]\n{_point_context(point, include_source=False)}"
+        for index, point in enumerate(selected, start=1)
+    ]
+
+    if not os.environ.get("AI_API_KEY", "").strip():
+        lines = []
+        for point in selected[:5]:
+            lines.append(
+                f"**{point.get('knowledge_name')}**\n\n"
+                f"{point.get('core_definition') or point.get('content') or '暂无摘要。'}"
+            )
+        return (
+            "当前未配置大模型 API Key，先按 408 内置知识库给你列出最相关的内容：\n\n"
+            + "\n\n".join(lines)
+        )
+
+    mode_guidance = ""
+    max_tokens = 2200
+    if answer_mode == "outline":
+        mode_guidance = "本次任务是梳理知识框架，必须完整覆盖数据结构、计算机组成原理、操作系统、计算机网络四部分。"
+        max_tokens = 4200
+    elif answer_mode == "review":
+        mode_guidance = "本次任务是生成复习清单，必须按数据结构、计算机组成原理、操作系统、计算机网络四部分分别列出由浅入深的复习顺序。"
+        max_tokens = 5200
+    elif answer_mode == "exam":
+        mode_guidance = "本次任务是总结高频考点、典型考法和易混点，必须覆盖数据结构、计算机组成原理、操作系统、计算机网络四部分。"
+        max_tokens = 3600
+
+    prompt = f"""你是 408 计算机考研辅导老师。请优先依据下面的内置 408 知识库回答，不要编造院校、年份或教材页码。
+回答要求：直接讲结论；分点解释；必要时补易错提醒；如果知识库不足，明确说还需要结合教材或用户上传资料核对。
+{mode_guidance}
+
+用户问题：{question}
+
+408内置知识库：
+{chr(10).join(source_blocks)[:52000]}
+"""
+    try:
+        return _clean_assistant_answer(_call_llm_api(prompt, max_tokens=max_tokens))
+    except Exception as exc:
+        return f"{_format_llm_error(exc)} 408 内置知识库已经可在下方知识库里直接学习。"
+
+
+def _answer_subject_question(user_id, subject, source_ids, question, answer_mode="custom"):
     if not source_ids:
+        if is_408_subject(subject):
+            return _answer_builtin_408_question(user_id, subject, question, answer_mode=answer_mode)
         return "请先在左侧至少勾选一份资料，再开始提问。"
     placeholders = ",".join("?" for _ in source_ids)
     conn = sqlite3.connect(MEMORY_DB)
@@ -3397,11 +4046,12 @@ def _answer_subject_question(user_id, subject, source_ids, question):
             text = expanded_knowledge
         if text:
             title = row["chapter_name"] or row["filename"] or f"来源{index}"
-            source_blocks.append(f"[来源{index}：{title}]\n{text[:6500]}")
+            per_source_limit = 12000 if answer_mode in {"outline", "review"} else 6500
+            source_blocks.append(f"[来源{index}：{title}]\n{text[:per_source_limit]}")
     if not source_blocks:
         return "已选资料暂时没有可用文字，请在高级校对区检查识别结果。"
 
-    if not API_KEY:
+    if not os.environ.get("AI_API_KEY", "").strip():
         compact = "\n\n".join(source_blocks)
         terms = [term for term in question.replace("？", " ").replace("，", " ").split() if len(term) >= 2]
         matches = []
@@ -3416,20 +4066,964 @@ def _answer_subject_question(user_id, subject, source_ids, question):
             f"{excerpt}\n\n配置 AI_API_KEY 后，我可以进一步做跨来源归纳和带引用回答。"
         )
 
-    prompt = f"""你是考研专业课资料助手。只能依据给定来源回答，不要编造。
-回答要求：直接从结论或正文开始，不复述用户问题，不写“根据您提供的资料”等开场，不写“如需更多帮助”等结尾；分点解释；关键判断用[来源N]标注依据；来源不足时明确说不知道。
+    mode_guidance = ""
+    max_tokens = 2200
+    source_limit = 24000
+    if answer_mode == "outline":
+        mode_guidance = "本次任务是梳理知识框架。请覆盖资料中出现的所有考试科目，不要因为篇幅只写前半部分；若是408，必须分别写数据结构、计算机组成原理、操作系统、计算机网络。"
+        max_tokens = 4200
+        source_limit = 42000
+    elif answer_mode == "review":
+        mode_guidance = "本次任务是生成复习清单。请按考试科目分块，由浅入深列出复习顺序；若是408，必须完整覆盖数据结构、计算机组成原理、操作系统、计算机网络四部分。每部分保留关键知识点，不要只写数据结构和计组。"
+        max_tokens = 5200
+        source_limit = 52000
+    elif answer_mode == "exam":
+        mode_guidance = "本次任务是总结高频考点、典型考法和易混点。请按考试科目分块，覆盖资料中出现的全部科目。"
+        max_tokens = 3600
+        source_limit = 36000
+
+    prompt = f"""你是考研专业课资料助手。只能依据给定资料回答，不要编造。
+回答要求：直接从结论或正文开始，不复述用户问题，不写“根据您提供的资料”等开场，不写“如需更多帮助”等结尾；分点解释；不要在正文里显示来源编号、页码或提示词要求；资料不足时直接说明不知道。
 如果来源标有“AI基于提纲发散”，必须在回答中明确说明这部分不是教材原文，建议用户回教材核对。
+{mode_guidance}
 
 专业课：{subject}
 用户问题：{question}
 
 资料来源：
-{chr(10).join(source_blocks)[:22000]}
+{chr(10).join(source_blocks)[:source_limit]}
 """
     try:
-        return _call_llm_api(prompt, max_tokens=1800)
+        return _clean_assistant_answer(_call_llm_api(prompt, max_tokens=max_tokens))
     except Exception as exc:
-        return f"暂时无法调用大模型：{exc}。资料已经保存，你可以稍后重试。"
+        return f"{_format_llm_error(exc)} 资料已经保存，你可以稍后重试。"
+
+
+def _chat_cache_id(slot_key, prompt, source_signature):
+    if slot_key == "custom":
+        prompt_hash = hashlib.sha256(str(prompt or "").encode("utf-8")).hexdigest()
+        return f"custom:{prompt_hash}|{source_signature}"
+    return f"{slot_key}|{source_signature}"
+
+
+def _chat_job_id(user_id, subject, cache_id):
+    raw = f"{user_id}|{subject}|{cache_id}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _get_chat_job(job_id):
+    if not job_id:
+        return None
+    with _CHAT_JOB_LOCK:
+        job = _CHAT_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def _start_chat_answer_background(user_id, subject, source_ids, prompt, answer_mode, cache_id):
+    job_id = _chat_job_id(user_id, subject, cache_id)
+    with _CHAT_JOB_LOCK:
+        existing = _CHAT_JOBS.get(job_id)
+        if existing and existing.get("status") in {"running", "completed"}:
+            return job_id
+        _CHAT_JOBS[job_id] = {
+            "status": "running",
+            "prompt": prompt,
+            "answer": "",
+            "error": "",
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+
+    def worker():
+        try:
+            answer = _answer_subject_question(
+                user_id,
+                subject,
+                list(source_ids or []),
+                prompt,
+                answer_mode=answer_mode,
+            )
+        except Exception as exc:
+            with _CHAT_JOB_LOCK:
+                _CHAT_JOBS[job_id] = {
+                    **_CHAT_JOBS.get(job_id, {}),
+                    "status": "failed",
+                    "error": _format_llm_error(exc),
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                }
+        else:
+            with _CHAT_JOB_LOCK:
+                _CHAT_JOBS[job_id] = {
+                    **_CHAT_JOBS.get(job_id, {}),
+                    "status": "completed",
+                    "answer": answer,
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                }
+
+    thread = threading.Thread(
+        target=worker,
+        name=f"pk-chat-{job_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+    # Local fallbacks and tests finish almost instantly. Give them a tiny window
+    # so cached answers appear immediately without making real model calls feel
+    # like the page is locked.
+    thread.join(0.05)
+    return job_id
+
+
+def _sync_chat_answer_from_job(answer_cache, cache_id, job_id):
+    job = _get_chat_job(job_id)
+    if not job:
+        return None
+    if job.get("status") == "completed":
+        answer_cache[cache_id] = {
+            "prompt": job.get("prompt") or "",
+            "answer": job.get("answer") or "回答为空，请稍后重试。",
+        }
+    elif job.get("status") == "failed":
+        answer_cache[cache_id] = {
+            "prompt": job.get("prompt") or "",
+            "answer": job.get("error") or "暂时无法生成回答，请稍后重试。",
+        }
+    return job
+
+
+def _sync_pending_chat_jobs(answer_cache, pending_jobs):
+    finished = []
+    for cache_id, job_id in list((pending_jobs or {}).items()):
+        job = _sync_chat_answer_from_job(answer_cache, cache_id, job_id)
+        if job and job.get("status") in {"completed", "failed"}:
+            finished.append(cache_id)
+    for cache_id in finished:
+        pending_jobs.pop(cache_id, None)
+
+
+def _parse_json_list(value):
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def _load_professional_points(user_id, subject):
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        ensure_builtin_408_points(conn, user_id, subject)
+        conn.commit()
+        points = list_user_knowledge_points(
+            conn,
+            user_id,
+            limit=1000,
+            subject=subject,
+        )
+        ensure_memory_rows(conn, user_id, subject, points)
+        conn.commit()
+        return _sort_professional_points(points)
+    finally:
+        conn.close()
+
+
+def _sort_professional_points(points):
+    chapter_order = {
+        "数据结构": 1,
+        "计算机组成原理": 2,
+        "计组": 2,
+        "操作系统": 3,
+        "计算机网络": 4,
+        "计网": 4,
+    }
+
+    def sort_key(point):
+        source_rank = 0 if point.get("source_type") == BUILTIN_408_SOURCE_TYPE else 1
+        chapter = point.get("chapter_name") or ""
+        return (
+            source_rank,
+            chapter_order.get(chapter, 99),
+            chapter,
+            point.get("knowledge_name") or "",
+            point.get("id") or 0,
+        )
+
+    return sorted(points or [], key=sort_key)
+
+
+def _point_exam_subject(point):
+    return (
+        point.get("chapter_name")
+        or point.get("source_location")
+        or point.get("subject")
+        or "未分类科目"
+    )
+
+
+def _exam_subject_options(subject, points):
+    profile = get_rag_knowledge_base_by_subject(subject)
+    configured = list(getattr(profile, "exam_subjects", []) or [])
+    discovered = [_point_exam_subject(point) for point in points or []]
+    ordered = []
+    for item in [*configured, *discovered]:
+        clean = str(item or "").strip()
+        if clean and clean not in ordered:
+            ordered.append(clean)
+    return ["全部科目"] + ordered
+
+
+def _point_context(point, *, include_source=True):
+    lines = [f"知识点：{point.get('knowledge_name') or '未命名知识点'}"]
+    field_labels = [
+        ("core_definition", "核心定义"),
+        ("example_or_application", "例子或应用"),
+        ("content", "整理内容"),
+    ]
+    for field, label in field_labels:
+        value = str(point.get(field) or "").strip()
+        if value:
+            lines.append(f"{label}：{value[:1800]}")
+    for field, label in (
+        ("exam_question_styles_json", "常见考法"),
+        ("pitfalls_json", "易错点"),
+        ("keywords_json", "关键词"),
+        ("related_concepts_json", "相关概念"),
+    ):
+        values = _parse_json_list(point.get(field))
+        if values:
+            lines.append(f"{label}：{'、'.join(values)}")
+    source_text = str(point.get("source_text") or "").strip()
+    if include_source and source_text:
+        lines.append(f"原文依据：{source_text[:1800]}")
+    mastery_standard = _mastery_standard_for_point(point)
+    if mastery_standard:
+        lines.append(f"掌握标准：{mastery_standard}")
+    example_question = _exam_style_example_for_point(point)
+    if example_question:
+        lines.append(f"真题风格例题：{example_question}")
+    return "\n".join(lines)
+
+
+def _mastery_standard_for_point(point):
+    source = "\n".join(
+        str(point.get(field) or "")
+        for field in ("core_definition", "review_content", "content")
+    )
+    match = re.search(r"掌握标准[:：]\s*([^\n]+)", source)
+    if match:
+        return match.group(1).strip()
+    name = point.get("knowledge_name") or "这个知识点"
+    return f"能用自己的话讲清“{name}”解决什么问题、适用条件是什么，做题时能写出关键步骤并说明一个易错点。"
+
+
+def _exam_style_example_for_point(point):
+    generated = _fallback_professional_question(point, "application")
+    return str(generated.get("question") or "").strip()
+
+
+def _parse_llm_json(raw):
+    text = str(raw or "").strip()
+    candidates = []
+    candidates.extend(
+        match.group(1).strip()
+        for match in re.finditer(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    )
+    candidates.append(text)
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start = text.find(opener)
+        end = text.rfind(closer)
+        if start >= 0 and end > start:
+            candidates.append(text[start:end + 1])
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, str):
+            nested = _parse_llm_json(payload)
+            if nested:
+                return nested
+        if isinstance(payload, list):
+            payload = next((item for item in payload if isinstance(item, dict)), {})
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _payload_first(payload, *keys):
+    for key in keys:
+        value = payload.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _build_local_quiz_question(name, exam_styles, keywords, variant=0):
+    combined = " ".join([name, " ".join(exam_styles or []), " ".join(keywords or [])]).lower()
+    style = exam_styles[0] if exam_styles else "应用分析"
+    keyword_hint = f"作答时至少用到：{'、'.join(keywords[:4])}。" if keywords else "作答时写清关键条件、过程和结论。"
+    scenarios = []
+    if any(token in combined for token in ("外部排序", "多路归并", "败者树")):
+        scenarios.extend([
+            "有 24 个初始归并段，内存缓冲区允许 4 路归并。请计算至少需要几趟归并，并说明如果引入败者树，主要优化的是哪一部分开销。",
+            "某外部排序已经形成 18 个初始归并段，设备限制最多做 5 路归并。请给出归并趟数，并说明增加归并路数为什么不一定总是更好。",
+        ])
+    if any(token in combined for token in ("cache", "高速缓存", "组相联", "直接映射")):
+        scenarios.extend([
+            "某机主存地址 32 位，Cache 容量 32KB，块大小 64B，采用 4 路组相联。请划分主存地址字段，并说明一次访存如何定位到具体 Cache 行。",
+            "同一段循环代码反复访问相邻数组元素。请分别说明直接映射和组相联 Cache 下可能出现的冲突，并给出一种降低缺失率的思路。",
+        ])
+    if any(token in combined for token in ("alu", "标志位", "补码", "溢出")):
+        scenarios.extend([
+            "在 8 位补码机器中计算 01111111 + 00000001。请写出结果，并判断 ZF、SF、CF、OF 中哪些会被置位，说明依据。",
+            "在 8 位机器中执行 10000000 - 00000001。请按补码加法过程写出结果，并区分进位标志和溢出标志的含义。",
+        ])
+    if any(token in combined for token in ("i/o", "io", "接口", "端口", "中断", "dma")):
+        scenarios.extend([
+            "某外设接口包含数据端口、状态端口和控制端口，CPU 采用独立编址方式。现在要先查询设备是否就绪，再写入控制命令并传送一个字节。请写出访问顺序，并说明每个端口的作用。",
+            "比较程序查询、中断和 DMA 三种 I/O 方式：若一次要传输 4KB 连续数据，哪种方式更合适？请说明 CPU 参与程度和数据通路差异。",
+        ])
+    if any(token in combined for token in ("aov", "拓扑", "活动", "有向无环")):
+        scenarios.extend([
+            "已知活动依赖为 A->C、B->C、C->D、B->E、E->D。请给出一种拓扑序列，并说明如何判断该图是否存在环。",
+            "某课程先修关系形成 AOV 网。若拓扑排序过程中入度为 0 的顶点集合突然为空，但仍有顶点未输出，这说明什么？请写出判断依据。",
+        ])
+    if any(token in combined for token in ("b树", "b+树", "b 树", "b+ 树")):
+        scenarios.extend([
+            "比较 B 树和 B+ 树在范围查询中的表现。若要查找 [30, 80] 范围内的所有关键字，为什么数据库索引更常用 B+ 树？",
+            "一棵 m 阶 B 树插入关键字后结点上溢。请说明分裂过程，并指出它和 B+ 树插入时数据存放位置的差别。",
+        ])
+    if any(token in combined for token in ("进程", "线程", "调度", "死锁")):
+        scenarios.extend([
+            "系统中有三个进程竞争两类资源。请说明判断死锁至少要看哪些条件，并给出一种破坏死锁的处理办法。",
+            "比较进程切换和线程切换的开销来源。若一个服务器需要同时处理大量网络请求，为什么通常会考虑多线程或事件驱动？",
+        ])
+    if any(token in combined for token in ("tcp", "ip", "路由", "子网", "拥塞", "滑动窗口")):
+        scenarios.extend([
+            "主机 A 向主机 B 发送 TCP 数据，接收窗口从 8KB 降到 2KB，同时网络出现丢包。请分别说明流量控制和拥塞控制各在解决什么问题。",
+            "给定 IP 地址 192.168.10.77/26，请写出网络地址、可用主机范围，并说明路由器转发时主要依据哪一部分信息。",
+        ])
+    if not scenarios:
+        keyword_a = keywords[0] if keywords else name
+        keyword_b = keywords[1] if len(keywords) > 1 else "适用条件"
+        scenarios = [
+            f"下面有三种说法：A. {keyword_a} 只需要背定义；B. 做题时必须先判断 {keyword_b}；C. 任何题都可以直接套固定公式。请判断哪些说法可靠，并结合“{name}”说明理由。",
+            f"给出一个围绕“{name}”的{style}题：某同学把它和相邻概念混用，导致结论错误。请指出错误在哪里，写出正确判断步骤，并补一个易错提醒。",
+        ]
+    return f"{scenarios[variant % len(scenarios)]} {keyword_hint}"
+
+
+def _question_mode_label(mode):
+    labels = {
+        "concept": "概念自测",
+        "choice": "选择题",
+        "blank": "填空题",
+        "algorithm": "算法题",
+        "application": "综合应用题",
+        "quiz": "综合应用题",
+    }
+    return labels.get(mode or "", "练习题")
+
+
+def _local_choice_question(name, keywords, variant=0):
+    keyword = keywords[0] if keywords else name
+    distractor = keywords[1] if len(keywords) > 1 else "相邻概念"
+    combined = f"{name} {' '.join(keywords or [])}".lower()
+    if any(token in combined for token in ("aov", "拓扑", "活动", "有向无环")):
+        variants = [
+            (
+                "某 AOV 网在拓扑排序过程中还有顶点未输出，但当前入度为 0 的顶点集合为空。下列判断最合适的是哪一项？",
+                [
+                    "A. 图中一定不存在环，只是还没选到起点。",
+                    "B. 图中存在有向环，剩余顶点无法继续拓扑排序。",
+                    "C. 只要换成邻接矩阵存储，就一定可以继续输出。",
+                    "D. 拓扑排序只能判断连通无向图，不能处理课程先修关系。",
+                ],
+                "B",
+                "入度为 0 的顶点集合为空且仍有顶点未输出，说明剩余顶点互相依赖，存在有向环。",
+            ),
+            (
+                "已知活动依赖 A->C、B->C、C->D。关于该 AOV 网的拓扑序列，下列说法正确的是哪一项？",
+                [
+                    "A. A 必须排在 B 前面。",
+                    "B. C 可以排在 A 或 B 前面。",
+                    "C. A、B 都必须排在 C 前面，D 必须排在 C 后面。",
+                    "D. 只要输出 D，就不需要考虑 C 的位置。",
+                ],
+                "C",
+                "A 和 B 都是 C 的前驱，C 又是 D 的前驱，因此 A、B 在 C 前，C 在 D 前。",
+            ),
+        ]
+        question, options, correct, reference = variants[variant % len(variants)]
+        return {
+            "question": question,
+            "options": options,
+            "correct_answer": correct,
+            "reference_answer": f"选 {correct}。{reference}",
+            "grading_points": ["判断入度/前驱关系", "识别有向无环图约束", "说明排除理由"],
+            "similar_question": "换一组课程先修关系，判断是否能完成拓扑排序。",
+        }
+    variants = [
+        (
+            f"关于“{name}”，下列说法最恰当的是哪一项？请先选出选项，再说明理由。",
+            [
+                f"A. 只要背出“{name}”的定义，就一定能解决所有相关题目。",
+                f"B. 做“{name}”相关题时，通常要先判断题干条件，再选择对应方法。",
+                f"C. “{keyword}”和“{distractor}”在任何场景下都可以互换。",
+                f"D. 遇到“{name}”题目时，不需要说明过程，只写结论即可。",
+            ],
+        ),
+        (
+            f"围绕“{name}”做题时，下列哪一项最符合 408 的答题思路？",
+            [
+            f"A. “{name}”只会考纯记忆，不会结合应用场景。",
+            f"B. 若题干改变约束条件，“{name}”的判断步骤或计算过程可能随之变化。",
+            f"C. “{keyword}”出现时，答案一定唯一且不需要说明理由。",
+            f"D. 相关概念之间没有必要比较差异。",
+            ],
+        ),
+    ]
+    question, options = variants[variant % len(variants)]
+    return {
+        "question": question,
+        "options": options,
+        "correct_answer": "B",
+        "reference_answer": f"选 B。关键不是背名词，而是根据题干条件判断“{name}”的适用场景、过程和结论。",
+        "grading_points": ["选出 B", "说明题干条件", "指出易混说法为什么不可靠"],
+        "similar_question": f"换一个关于“{name}”的选择题：哪一项最能体现它和相邻概念的区别？",
+    }
+
+
+def _local_blank_question(name, keywords, variant=0):
+    keyword = keywords[0] if keywords else name
+    second = keywords[1] if len(keywords) > 1 else "适用条件"
+    combined = f"{name} {' '.join(keywords or [])}".lower()
+    if any(token in combined for token in ("aov", "拓扑", "活动", "有向无环")):
+        variants = [
+            (
+                "填空：对 AOV 网做拓扑排序时，每一轮应优先选择当前入度为 ______ 的顶点输出。",
+                "0",
+                ["知道入度为 0", "能解释前驱活动已完成", "能继续更新后继入度"],
+            ),
+            (
+                "填空：若拓扑排序未输出全部顶点，但当前没有入度为 0 的顶点，说明该有向图中存在 ______ 。",
+                "有向环",
+                ["判断未输出顶点", "识别无入度为 0 顶点", "推出存在有向环"],
+            ),
+        ]
+        question, answer, points = variants[variant % len(variants)]
+        return {
+            "question": question,
+            "reference_answer": f"参考填法：{answer}。要能说明入度变化和是否存在有向环的判断依据。",
+            "grading_points": points,
+            "similar_question": "给出一组先修边，挖空某一步的入度集合或输出序列。",
+        }
+    variants = [
+        (
+            f"填空：做“{name}”相关题时，先判断 ______ ，再写出关键过程或结论。",
+            second,
+            ["写出条件", "扣回知识点", "能解释为什么"],
+        ),
+        (
+            f"填空：“{name}”常和 ______ 混淆，复习时要比较二者的适用场景和判断步骤。",
+            keyword,
+            ["写出易混对象", "比较适用场景", "说明判断步骤"],
+        ),
+    ]
+    question, answer, points = variants[variant % len(variants)]
+    return {
+        "question": question,
+        "reference_answer": f"参考填法：{answer}。关键是填完后能解释这个空为什么影响解题。",
+        "grading_points": points,
+        "similar_question": f"围绕“{name}”再出一道填空：把容易漏掉的判断条件挖空。",
+    }
+
+
+def _local_algorithm_question(name, keywords, variant=0):
+    combined = f"{name} {' '.join(keywords or [])}".lower()
+    if any(token in combined for token in ("aov", "拓扑", "活动", "有向无环")):
+        variants = [
+            (
+                "给定 AOV 网的边集：A->C、B->C、C->E、B->D、D->E。"
+                "请写出一种拓扑排序算法的关键步骤，给出一个合法拓扑序列，并分析时间复杂度。"
+            ),
+            (
+                "某工程共有活动 0,1,2,3,4，先后约束为 0->2、1->2、2->3、3->1、3->4。"
+                "请用拓扑排序判断工程能否完成，写出入度变化的关键步骤，并说明判断依据。"
+            ),
+        ]
+        question = variants[variant % len(variants)]
+        return {
+            "question": question,
+            "reference_answer": "参考要点：建立入度数组和邻接表；反复取入度为 0 的顶点输出并删除其出边；若输出顶点数等于总顶点数则存在拓扑序列，否则存在有向环；邻接表实现时间复杂度为 O(V+E)。",
+            "grading_points": ["建图和入度数组", "入度为 0 顶点入队/输出", "删除出边并更新入度", "判断是否有环", "复杂度 O(V+E)"],
+            "similar_question": "更换边集后重新判断能否完成，并写出至少一个合法拓扑序列。",
+        }
+    if any(token in combined for token in ("排序", "查找", "树", "图", "拓扑", "aov", "kmp", "链表", "队列", "栈")):
+        question = (
+            f"围绕“{name}”完成一道算法题：给定一个小规模输入样例，"
+            "请写出算法思路、关键步骤/伪代码，并分析时间复杂度。"
+            f"作答时至少用到：{'、'.join(keywords[:4]) if keywords else name}。"
+        )
+    else:
+        question = (
+            f"把“{name}”改写成过程推演题：请给出处理流程、关键判断条件，"
+            "并说明每一步为什么成立。若它不适合写成算法题，请说明原因并改成综合应用题作答。"
+        )
+    return {
+        "question": question,
+        "reference_answer": f"答案应包含：问题建模、关键步骤或伪代码、边界条件、复杂度/代价分析，并扣回“{name}”的核心定义。",
+        "grading_points": ["建模正确", "步骤完整", "边界条件", "复杂度分析", "扣回知识点"],
+        "similar_question": f"围绕“{name}”再设计一个输入规模更大的算法/过程推演题。",
+    }
+
+
+def _fallback_professional_question(point, mode, variant=0):
+    name = point.get("knowledge_name") or "这个知识点"
+    answer = point.get("core_definition") or point.get("source_text") or point.get("content") or "请结合上传资料作答。"
+    exam_styles = _parse_json_list(point.get("exam_question_styles_json"))
+    keywords = _parse_json_list(point.get("keywords_json"))[:4]
+    keyword_hint = f"可以围绕 {'、'.join(keywords)} 展开。" if keywords else "注意写出关键条件、过程和结论。"
+    if mode == "concept":
+        question = (
+            f"某同学复习“{name}”时，只记住了名词但说不清它解决什么问题。"
+            f"请用自己的话解释它的核心含义、适用场景，并举一个容易混淆的概念作比较。{keyword_hint}"
+        )
+    elif mode == "choice":
+        payload = _local_choice_question(name, keywords, variant)
+        return {
+            "question_type": "choice",
+            **payload,
+        }
+    elif mode == "blank":
+        payload = _local_blank_question(name, keywords, variant)
+        return {
+            "question_type": "blank",
+            **payload,
+        }
+    elif mode == "algorithm":
+        payload = _local_algorithm_question(name, keywords, variant)
+        return {
+            "question_type": "algorithm",
+            **payload,
+        }
+    elif exam_styles:
+        question = _build_local_quiz_question(name, exam_styles, keywords, variant)
+    else:
+        question = _build_local_quiz_question(name, exam_styles, keywords, variant)
+    return {
+        "question_type": "concept" if mode == "concept" else "application",
+        "question": question,
+        "reference_answer": str(answer)[:1800],
+        "grading_points": _parse_json_list(point.get("keywords_json"))[:6],
+        "similar_question": f"围绕“{name}”换一个条件或角度再做一题。",
+    }
+
+
+def _is_placeholder_question(question):
+    normalized = re.sub(r"[\s。！？!?,，:：；;、]+", "", str(question or "")).strip()
+    return normalized in {"", "题目", "问题", "练习题", "概念自测", "请作答"}
+
+
+def _generate_professional_question(point, mode="quiz", variant=0):
+    fallback = _fallback_professional_question(point, mode, variant=variant)
+    if os.environ.get("AI_API_KEY", "").strip():
+        generated, _warning = _generate_professional_question_with_ai(
+            point,
+            mode,
+            variant=variant,
+        )
+        question = str(generated.get("question") or "").strip()
+        if not _is_placeholder_question(question) and question != fallback.get("question"):
+            return generated
+    return fallback
+
+
+def _generate_professional_question_with_ai(point, mode="quiz", variant=1):
+    fallback = _fallback_professional_question(point, mode, variant=variant)
+    if not os.environ.get("AI_API_KEY", "").strip():
+        return fallback, ""
+    mode_guidance = {
+        "choice": "生成一道408统考风格单选题，必须有 A/B/C/D 四个选项、唯一正确答案和解析。",
+        "blank": "生成一道填空题，空格必须挖在关键条件、算法步骤、字段含义或易混点上，不能只挖名词。",
+        "algorithm": "生成一道算法题或过程推演题，必须给出输入/条件、要求写思路或伪代码，并能评分。",
+        "application": "生成一道综合应用题，题干必须有具体条件、任务和可评分步骤。",
+        "quiz": "生成一道综合应用题，题干必须有具体条件、任务和可评分步骤。",
+        "concept": "生成一道概念辨析题，要求解释核心含义、适用条件和易混点。",
+    }.get(mode, "生成一道综合应用题，题干必须具体可作答。")
+    prompt = f"""你是 408 计算机考研命题老师。请先读“当前知识点”的核心定义、考法、易错点、掌握标准和真题风格例题，再命题。
+
+要求：
+1. 题干必须有明确任务或具体场景，不能只写“围绕某知识点作答”。
+2. 适合考研专业课复习，难度中等，风格接近 408 统考：重视条件判断、过程推演、复杂度/字段/协议/状态变化。
+3. 不编造学校、年份、真题来源。
+4. {mode_guidance}
+5. 只输出一行 JSON，不要 Markdown，不要解释。字段固定为：{{"question_type":"choice|blank|application|algorithm|concept","question":"题干","options":["A. ...","B. ...","C. ...","D. ..."],"correct_answer":"B","reference_answer":"参考答案","grading_points":["评分点1","评分点2"],"similar_question":"相似题题干"}}
+6. 如果不是选择题，options 可为空数组，correct_answer 可为空字符串。
+7. 这是第 {variant} 次换题，必须换场景、换条件或换考法，不要复用上一次的题干模板。
+8. 若当前知识点内容不足，优先依据内置 408 知识库中的上下文补足；仍不足时给出中等难度通用 408 题，不要联网编造。
+9. 题干要像学生真的能作答的题：给出边集、地址位数、页表状态、协议字段、进程资源、输入串等具体条件；不要只要求“说明概念”。
+10. 变化种子：{uuid4().hex[:10]}。请据此更换题目数据和叙事场景。
+
+当前知识点：
+{_point_context(point, include_source=False)}
+"""
+    try:
+        payload = _parse_llm_json(_call_llm_api(prompt, max_tokens=2200, temperature=0.85))
+    except Exception as exc:
+        return fallback, _format_llm_error(exc)
+    question = str(_payload_first(payload, "question", "题干", "题目", "练习题")).strip()
+    reference_answer = str(_payload_first(payload, "reference_answer", "answer", "参考答案", "答案")).strip()
+    grading_points = _payload_first(payload, "grading_points", "points", "评分点", "要点") or []
+    options = _payload_first(payload, "options", "选项") or []
+    correct_answer = str(_payload_first(payload, "correct_answer", "正确答案", "答案选项")).strip()
+    similar_question = str(_payload_first(payload, "similar_question", "相似题", "同类题")).strip()
+    if _is_placeholder_question(question) or len(question) < 18 or not reference_answer:
+        return fallback, ""
+    if isinstance(grading_points, str):
+        grading_points = [
+            item.strip()
+            for item in re.split(r"[\n,，、;；]+", grading_points)
+            if item.strip()
+        ]
+    elif not isinstance(grading_points, list):
+        grading_points = []
+    if isinstance(options, str):
+        options = [
+            item.strip()
+            for item in re.split(r"[\n；;]+", options)
+            if item.strip()
+        ]
+    elif not isinstance(options, list):
+        options = []
+    return {
+        "question_type": str(payload.get("question_type") or fallback.get("question_type") or mode or "application"),
+        "question": question,
+        "options": [str(item).strip() for item in options if str(item).strip()][:4],
+        "correct_answer": correct_answer,
+        "reference_answer": reference_answer,
+        "grading_points": [str(item).strip() for item in grading_points if str(item).strip()][:8],
+        "similar_question": similar_question or fallback.get("similar_question") or "",
+    }, ""
+
+
+def _fallback_professional_grade(point, answer):
+    reference = " ".join(
+        str(point.get(field) or "")
+        for field in ("knowledge_name", "core_definition", "source_text", "content")
+    )
+    terms = _parse_json_list(point.get("keywords_json"))
+    terms.extend(
+        item.strip()
+        for item in re.split(r"[\s，。；、,:：()（）]+", reference)
+        if 2 <= len(item.strip()) <= 12
+    )
+    terms = list(dict.fromkeys(terms))[:24]
+    hit_count = sum(term.lower() in answer.lower() for term in terms)
+    coverage = hit_count / max(1, min(len(terms), 10))
+    length_bonus = min(14, len(answer.strip()) // 18)
+    score = max(25, min(88, round(34 + coverage * 48 + length_bonus)))
+    if len(answer.strip()) < 20:
+        score = min(score, 45)
+    if score >= 70:
+        feedback = "核心意思已经讲出来了。再补上适用条件、易混点或一道典型考法，答案会更稳。"
+        missed_points = []
+        mistake_reason = "整体方向正确，主要是表达还可以更贴近评分点。"
+    elif score >= 50:
+        feedback = "方向基本对，但关键条件和概念关系还不够完整。建议对照原文补齐后再讲一遍。"
+        missed_points = terms[hit_count:hit_count + 3] or ["关键条件", "过程说明"]
+        mistake_reason = "答案覆盖了一部分关键词，但缺少条件判断、过程或概念边界。"
+    else:
+        feedback = "目前更像零散印象。先回到核心定义和原文依据，抓住两三个关键词后重新作答。"
+        missed_points = terms[:3] or ["核心定义", "适用条件", "易错点"]
+        mistake_reason = "答案与参考要点重合较少，可能还停留在模糊印象。"
+    rating = "easy" if score >= 88 else "good" if score >= 70 else "hard" if score >= 50 else "again"
+    return {
+        "score": score,
+        "feedback": feedback,
+        "rating": rating,
+        "missed_points": missed_points,
+        "mistake_reason": mistake_reason,
+        "next_review": "回到核心定义、适用条件和易错点，再做一道同类题。",
+        "similar_question": "把题干条件换一个角度，重新判断本知识点的适用过程。",
+    }
+
+
+def _grade_professional_answer(point, question, answer, reference_answer, grading_points, mode, correct_answer="", *, use_ai=True):
+    fallback = _fallback_professional_grade(point, answer)
+    if not use_ai or not os.environ.get("AI_API_KEY", "").strip():
+        return fallback
+    prompt = f"""你是考研专业课阅卷老师。依据用户自己的资料评分，不要展示思考过程。
+
+评分要求：
+- 总分 0 到 100。
+- 看概念是否准确、要点是否完整、表达是否清楚。
+- 如果是选择题，先看选项是否正确，再看理由。
+- 资料没有支持的说法不要替学生补成正确答案。
+- 反馈要指出：漏了哪个得分点、为什么错、下次复习哪个知识点、再给一道相似题。
+- 只输出 JSON：{{"score":80,"feedback":"反馈","rating":"again|hard|good|easy","missed_points":["漏分点"],"mistake_reason":"错因","next_review":"下次复习建议","similar_question":"相似题"}}
+
+作答类型：{mode}
+题目：{question}
+正确选项：{correct_answer}
+参考答案：{reference_answer}
+评分点：{'、'.join(grading_points or [])}
+学生回答：{answer}
+"""
+    try:
+        payload = _parse_llm_json(_call_llm_api(prompt, max_tokens=700))
+        score = max(0, min(100, int(payload.get("score"))))
+    except (Exception, TypeError, ValueError):
+        return fallback
+    feedback = str(payload.get("feedback") or fallback["feedback"]).strip()
+    rating = str(payload.get("rating") or "").strip().lower()
+    if rating not in {"again", "hard", "good", "easy"}:
+        rating = "easy" if score >= 88 else "good" if score >= 70 else "hard" if score >= 50 else "again"
+    missed_points = payload.get("missed_points") or payload.get("漏分点") or fallback.get("missed_points") or []
+    if isinstance(missed_points, str):
+        missed_points = [item.strip() for item in re.split(r"[\n,，、;；]+", missed_points) if item.strip()]
+    if not isinstance(missed_points, list):
+        missed_points = []
+    return {
+        "score": score,
+        "feedback": feedback,
+        "rating": rating,
+        "missed_points": [str(item).strip() for item in missed_points if str(item).strip()][:6],
+        "mistake_reason": str(payload.get("mistake_reason") or payload.get("错因") or fallback.get("mistake_reason") or "").strip(),
+        "next_review": str(payload.get("next_review") or payload.get("下次复习") or fallback.get("next_review") or "").strip(),
+        "similar_question": str(payload.get("similar_question") or payload.get("相似题") or fallback.get("similar_question") or "").strip(),
+    }
+
+
+def _save_professional_study_result(user_id, subject, point, mode, question, answer, result):
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        saved = record_study_result(
+            conn,
+            user_id=user_id,
+            subject=subject,
+            knowledge_id=point.get("id"),
+            study_mode=mode,
+            question=question,
+            user_answer=answer,
+            feedback=result.get("feedback") or "",
+            score=result.get("score") or 0,
+            rating=result.get("rating") or "again",
+        )
+        conn.commit()
+        return saved
+    finally:
+        conn.close()
+
+
+def _study_state_key(user_id, subject, scope):
+    return f"pk_study_{scope}_{user_id}_{subject}"
+
+
+def _question_with_options(question, options):
+    options = [str(item).strip() for item in options or [] if str(item).strip()]
+    if not options:
+        return str(question or "")
+    return f"{question}\n" + "\n".join(options)
+
+
+def _render_grade_details(result):
+    missed = result.get("missed_points") or []
+    if missed:
+        st.markdown(f"**漏掉的得分点**：{'、'.join(str(item) for item in missed)}")
+    if result.get("mistake_reason"):
+        st.markdown(f"**错因**：{result.get('mistake_reason')}")
+    if result.get("next_review"):
+        st.markdown(f"**下次复习**：{result.get('next_review')}")
+    if result.get("similar_question"):
+        with st.expander("相似题再来一道", expanded=False):
+            st.markdown(result.get("similar_question"))
+
+
+def _start_professional_study(user_id, subject, point, mode, scope):
+    variant_key = f"pk_question_variant_{user_id}_{subject}_{point.get('id')}_{mode}_{scope}"
+    variant = int(st.session_state.get(variant_key) or 0) + 1
+    st.session_state[variant_key] = variant
+    generated = _generate_professional_question(point, mode, variant=variant)
+    st.session_state[_study_state_key(user_id, subject, scope)] = {
+        "point_id": point.get("id"),
+        "mode": mode,
+        "variant": variant,
+        **generated,
+    }
+
+
+def _render_professional_study_panel(user_id, subject, point_map, scope, *, active_point_id=None):
+    state_key = _study_state_key(user_id, subject, scope)
+    active = st.session_state.get(state_key)
+    if not active:
+        return
+    if active_point_id is not None and active.get("point_id") != active_point_id:
+        return
+    point = point_map.get(active.get("point_id"))
+    if not point:
+        st.session_state.pop(state_key, None)
+        return
+
+    mode_label = _question_mode_label(active.get("mode"))
+    title = point.get("knowledge_name") or "当前知识点"
+    question_text = active.get("question") or ""
+    if _is_placeholder_question(question_text):
+        repaired = _fallback_professional_question(point, active.get("mode") or "quiz")
+        active.update(repaired)
+        st.session_state[state_key] = active
+        question_text = active.get("question") or ""
+    st.markdown(
+        f"""<div class="pk-study-panel"><strong>{_escape_html(title)} · {mode_label}</strong></div>""",
+        unsafe_allow_html=True,
+    )
+    st.markdown("**题目**")
+    st.info(question_text or "题目生成失败，请重新点击出题。")
+    options = [str(item).strip() for item in active.get("options") or [] if str(item).strip()]
+    if options:
+        st.markdown("**选项**")
+        for option in options:
+            st.markdown(f"- {option}")
+    tool_col1, tool_col2 = st.columns(2)
+    with tool_col1:
+        if st.button("换一道题", key=f"pk_study_regenerate_{scope}_{point.get('id')}_{active.get('mode')}", use_container_width=True):
+            variant = int(active.get("variant") or 0) + 1
+            generated, warning = _generate_professional_question_with_ai(
+                point,
+                active.get("mode") or "quiz",
+                variant=variant,
+            )
+            active.update(generated)
+            active["variant"] = variant
+            active.pop("result", None)
+            st.session_state[state_key] = active
+            st.rerun()
+    with tool_col2:
+        if st.button("保存本题", key=f"pk_study_save_question_{scope}_{point.get('id')}_{active.get('mode')}", use_container_width=True):
+            if not str(question_text or "").strip():
+                st.warning("当前题干为空，先换一道题再保存。")
+                return
+            storage_question = _question_with_options(question_text, active.get("options") or [])
+            storage_reference = active.get("reference_answer") or ""
+            if active.get("correct_answer"):
+                storage_reference = f"正确答案：{active.get('correct_answer')}\n{storage_reference}".strip()
+            conn = sqlite3.connect(MEMORY_DB)
+            try:
+                save_generated_question(
+                    conn,
+                    user_id=user_id,
+                    subject=subject,
+                    knowledge_id=point.get("id"),
+                    question=storage_question,
+                    reference_answer=storage_reference,
+                    grading_points=active.get("grading_points") or [],
+                    source_mode=active.get("mode") or "quiz",
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            _queue_toast("已保存到复习挑战的题目复练")
+            st.rerun()
+    result = active.get("result")
+    answer_key = f"pk_study_answer_{scope}_{point.get('id')}_{active.get('mode')}"
+    if result:
+        st.markdown(f"**本次得分：{result.get('score', 0)} / 100**")
+        st.write(result.get("feedback") or "本次结果已记录。")
+        _render_grade_details(result)
+        with st.expander("对照参考答案", expanded=False):
+            if active.get("correct_answer"):
+                st.markdown(f"**正确答案**：{active.get('correct_answer')}")
+            st.markdown(active.get("reference_answer") or "暂无参考答案。")
+        ai_col, close_result_col = st.columns([1, 1])
+        with ai_col:
+            if os.environ.get("AI_API_KEY", "").strip() and st.button(
+                "AI 精批这题",
+                key=f"pk_study_ai_grade_{scope}_{point.get('id')}_{active.get('mode')}",
+                use_container_width=True,
+            ):
+                saved_answer = st.session_state.get(answer_key, "")
+                refined = _grade_professional_answer(
+                    point,
+                    active.get("question") or "",
+                    str(saved_answer or ""),
+                    active.get("reference_answer") or "",
+                    active.get("grading_points") or [],
+                    active.get("mode") or "quiz",
+                    active.get("correct_answer") or "",
+                    use_ai=True,
+                )
+                active["result"] = refined
+                st.session_state[state_key] = active
+                _save_professional_study_result(
+                    user_id,
+                    subject,
+                    point,
+                    f"{active.get('mode') or 'quiz'}_ai",
+                    _question_with_options(active.get("question") or "", active.get("options") or []),
+                    str(saved_answer or ""),
+                    refined,
+                )
+                st.rerun()
+        with close_result_col:
+            close_result = st.button("结束本次练习", key=f"pk_study_close_result_{scope}", use_container_width=True)
+        if close_result:
+            st.session_state.pop(state_key, None)
+            st.session_state.pop(answer_key, None)
+            st.rerun()
+        return
+
+    answer = st.text_area(
+        "你的回答",
+        placeholder="先自己写，再提交。不会也可以把目前想到的写下来。",
+        height=150,
+        key=answer_key,
+    )
+    submit_col, close_col = st.columns([1.8, 1])
+    with submit_col:
+        submitted = st.button(
+            "提交并查看反馈",
+            key=f"pk_study_submit_{scope}",
+            type="primary",
+            use_container_width=True,
+        )
+    with close_col:
+        if st.button("先放一放", key=f"pk_study_close_{scope}", use_container_width=True):
+            st.session_state.pop(state_key, None)
+            st.session_state.pop(answer_key, None)
+            st.rerun()
+    if submitted:
+        if not answer.strip():
+            st.warning("先写一点你的理解再提交。")
+            return
+        result = _grade_professional_answer(
+            point,
+            active.get("question") or "",
+            answer.strip(),
+            active.get("reference_answer") or "",
+            active.get("grading_points") or [],
+            active.get("mode") or "quiz",
+            active.get("correct_answer") or "",
+            use_ai=False,
+        )
+        _save_professional_study_result(
+            user_id,
+            subject,
+            point,
+            active.get("mode") or "quiz",
+            _question_with_options(active.get("question") or "", active.get("options") or []),
+            answer.strip(),
+            result,
+        )
+        active["result"] = result
+        st.session_state[state_key] = active
+        st.rerun()
 
 
 def _render_subject_management(selected_subject):
@@ -3474,6 +5068,654 @@ def _render_subject_management(selected_subject):
                         st.rerun()
 
 
+def _start_syllabus_analysis_background(analysis_id):
+    def worker():
+        run_syllabus_analysis_job(MEMORY_DB, analysis_id)
+
+    thread = threading.Thread(
+        target=worker,
+        name=f"syllabus-analysis-{analysis_id}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _latest_syllabus_analysis(user_id, subject):
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        return get_latest_syllabus_analysis(conn, user_id, subject)
+    finally:
+        conn.close()
+
+
+def _syllabus_priority_matcher(user_id, subject):
+    latest = _latest_syllabus_analysis(user_id, subject)
+    if latest.get("status") != "completed":
+        return set(), set()
+    priority_points = latest.get("priority_points") or []
+    priority_ids = {
+        int(item.get("knowledge_id"))
+        for item in priority_points
+        if str(item.get("knowledge_id") or "").isdigit()
+    }
+    priority_names = {
+        str(item.get("knowledge_name") or "").strip()
+        for item in priority_points
+        if str(item.get("knowledge_name") or "").strip()
+    }
+    return priority_ids, priority_names
+
+
+def _resolve_priority_knowledge_ids(user_id, subject, priority_points):
+    priority_ids = {
+        int(item.get("knowledge_id"))
+        for item in priority_points or []
+        if str(item.get("knowledge_id") or "").isdigit()
+    }
+    missing_names = {
+        str(item.get("knowledge_name") or "").strip()
+        for item in priority_points or []
+        if not str(item.get("knowledge_id") or "").isdigit()
+        and str(item.get("knowledge_name") or "").strip()
+    }
+    if missing_names:
+        for point in _load_professional_points(user_id, subject):
+            name = str(point.get("knowledge_name") or "").strip()
+            if name in missing_names and point.get("id") is not None:
+                priority_ids.add(int(point["id"]))
+    return sorted(priority_ids)
+
+
+def _mark_priority_points_due_today(user_id, subject, priority_points):
+    knowledge_ids = _resolve_priority_knowledge_ids(user_id, subject, priority_points)
+    if not knowledge_ids:
+        return 0
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        for knowledge_id in knowledge_ids:
+            set_review_due_now(conn, user_id, subject, knowledge_id)
+        conn.commit()
+    finally:
+        conn.close()
+    return len(knowledge_ids)
+
+
+def _is_syllabus_source(source):
+    text = f"{source.get('chapter_name') or ''} {source.get('filename') or ''}".lower()
+    return any(token in text for token in ("考纲", "大纲", "考试范围", "招生目录", "syllabus", "outline"))
+
+
+def _render_professional_knowledge_library(user_id, subject, points, sources):
+    if not points:
+        st.info("这门专业课还没有知识点。可以先上传自己学校的考纲或课程资料，整理完成后会显示在这里。")
+        return
+
+    source_by_id = {source.get("id"): source for source in sources}
+    priority_ids, priority_names = _syllabus_priority_matcher(user_id, subject)
+    has_school_priority = bool(priority_ids or priority_names)
+    search_col, scope_col, type_col = st.columns([2.1, 1.1, 1.1])
+    with search_col:
+        query = st.text_input(
+            "搜索知识库",
+            placeholder="输入关键词筛选...",
+            key=f"pk_library_search_{user_id}_{subject}",
+        ).strip().lower()
+    with scope_col:
+        scope_filter = st.selectbox(
+            "学习范围",
+            ["全部知识", "学校优先"] if has_school_priority else ["全部知识"],
+            key=f"pk_library_scope_{user_id}_{subject}",
+        )
+    knowledge_types = sorted({str(point.get("knowledge_type") or "未分类") for point in points})
+    with type_col:
+        type_filter = st.selectbox(
+            "条目类型",
+            ["全部类型"] + knowledge_types,
+            key=f"pk_library_type_{user_id}_{subject}",
+        )
+
+    filtered = list(points)
+    if scope_filter == "学校优先":
+        filtered = [
+            point for point in filtered
+            if point.get("id") in priority_ids
+            or str(point.get("knowledge_name") or "").strip() in priority_names
+        ]
+    if type_filter != "全部类型":
+        filtered = [point for point in filtered if str(point.get("knowledge_type") or "未分类") == type_filter]
+    if query:
+        filtered = _filter_repository_points(filtered, query)
+
+    if not filtered:
+        st.info("没有找到匹配的知识点，换个关键词或考试科目试试。")
+        return
+
+    exam_subject_options = _exam_subject_options(subject, filtered)
+    exam_subject_filter = st.selectbox(
+        "考试科目",
+        exam_subject_options,
+        key=f"pk_library_exam_subject_{user_id}_{subject}",
+    )
+    if exam_subject_filter != "全部科目":
+        filtered = [
+            point for point in filtered
+            if _point_exam_subject(point) == exam_subject_filter
+        ]
+    st.markdown(
+        f'<div class="pk-library-count">共 <strong>{len(filtered)}</strong> 个知识点</div>',
+        unsafe_allow_html=True,
+    )
+    if not filtered:
+        st.info("这个考试科目下暂时没有知识点。")
+        return
+
+    per_page = 20
+    total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
+    if total_pages > 1:
+        page = int(
+            st.number_input(
+                "列表页",
+                min_value=1,
+                max_value=total_pages,
+                value=1,
+                key=f"pk_library_page_{user_id}_{subject}",
+            )
+        )
+    else:
+        page = 1
+    visible = filtered[(page - 1) * per_page:page * per_page]
+    visible_ids = {point.get("id") for point in visible}
+    point_map = {point.get("id"): point for point in points if point.get("id") is not None}
+    open_key = f"pk_library_open_{user_id}_{subject}"
+    raw_open_ids = st.session_state.get(open_key, [])
+    if isinstance(raw_open_ids, list):
+        open_ids = {str(item) for item in raw_open_ids}
+    elif raw_open_ids:
+        open_ids = {str(raw_open_ids)}
+    else:
+        open_ids = set()
+
+    for point in visible:
+        point_id = point.get("id")
+        point_id_key = str(point_id)
+        source = source_by_id.get(point.get("material_id"), {})
+        exam_subject_label = _point_exam_subject(point)
+        meta_items = [exam_subject_label]
+        if point.get("knowledge_type"):
+            meta_items.append(point.get("knowledge_type"))
+        if source and source.get("filename"):
+            meta_items.append("来自上传资料")
+        meta_html = "".join(f"<span>{_escape_html(item)}</span>" for item in meta_items if item)
+        st.markdown(
+            f"""
+            <div class="pk-knowledge-row">
+                {_escape_html(point.get('knowledge_name') or '未命名知识点')}
+                <div class="pk-knowledge-meta">{meta_html}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        view_col, quiz_col, choice_col, blank_col, algo_col, concept_col = st.columns([1.2, 1, 1, 1, 1, 1])
+        with view_col:
+            is_open = point_id_key in open_ids
+            if st.button("收起内容" if is_open else "展开查看", key=f"pk_library_view_{point_id}", use_container_width=True):
+                next_open_ids = set(open_ids)
+                if is_open:
+                    next_open_ids.discard(point_id_key)
+                else:
+                    next_open_ids.add(point_id_key)
+                st.session_state[open_key] = sorted(next_open_ids)
+                st.rerun()
+        with quiz_col:
+            if st.button("出题", key=f"pk_library_quiz_{point_id}", use_container_width=True):
+                _start_professional_study(user_id, subject, point, "application", "library")
+                st.rerun()
+        with choice_col:
+            if st.button("选择题", key=f"pk_library_choice_{point_id}", use_container_width=True):
+                _start_professional_study(user_id, subject, point, "choice", "library")
+                st.rerun()
+        with blank_col:
+            if st.button("填空题", key=f"pk_library_blank_{point_id}", use_container_width=True):
+                _start_professional_study(user_id, subject, point, "blank", "library")
+                st.rerun()
+        with algo_col:
+            if st.button("算法题", key=f"pk_library_algorithm_{point_id}", use_container_width=True):
+                _start_professional_study(user_id, subject, point, "algorithm", "library")
+                st.rerun()
+        with concept_col:
+            if st.button("概念自测", key=f"pk_library_concept_{point_id}", use_container_width=True):
+                _start_professional_study(user_id, subject, point, "concept", "library")
+                st.rerun()
+
+        if point_id_key in open_ids:
+            definition = point.get("core_definition") or point.get("content") or "暂无整理内容。"
+            st.markdown("**核心内容**")
+            st.markdown(definition)
+            exam_styles = _parse_json_list(point.get("exam_question_styles_json"))
+            pitfalls = _parse_json_list(point.get("pitfalls_json"))
+            if exam_styles:
+                st.markdown(f"**常见考法**：{'、'.join(exam_styles)}")
+            if pitfalls:
+                st.markdown(f"**易错点**：{'、'.join(pitfalls)}")
+            related = _parse_json_list(point.get("related_concepts_json"))
+            if related:
+                st.markdown(f"**关联知识点**：{'、'.join(related)}")
+            st.markdown(f"**掌握标准**：{_mastery_standard_for_point(point)}")
+            st.markdown("**真题风格例题**")
+            st.info(_exam_style_example_for_point(point))
+        _render_professional_study_panel(
+            user_id,
+            subject,
+            point_map,
+            "library",
+            active_point_id=point_id,
+        )
+    active = st.session_state.get(_study_state_key(user_id, subject, "library")) or {}
+    if active.get("point_id") not in visible_ids:
+        _render_professional_study_panel(user_id, subject, point_map, "library")
+
+
+def _memory_due(row):
+    next_review = row.get("next_review")
+    if not next_review:
+        return True
+    try:
+        return datetime.fromisoformat(next_review) <= datetime.now()
+    except (TypeError, ValueError):
+        return True
+
+
+def _render_professional_review_challenge(user_id, subject, points):
+    if not points:
+        st.info("知识库还是空的，先上传资料再开始复习。")
+        return
+    point_map = {point.get("id"): point for point in points if point.get("id") is not None}
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        memory_rows = list_memory_states(conn, user_id, subject)
+    finally:
+        conn.close()
+    candidates = [
+        row for row in memory_rows
+        if row.get("knowledge_id") in point_map
+        and (_memory_due(row) or float(row.get("mastery_score") or 0) < 0.65)
+    ]
+    candidates.sort(key=lambda row: (not _memory_due(row), float(row.get("mastery_score") or 0)))
+    st.markdown(f"**今天建议复习 {min(len(candidates), 8)} 个知识点**")
+    st.caption("先回忆再展开。点“记住了”或“还不熟”，下次复习时间会跟着调整。")
+
+    if not candidates:
+        st.success("今天没有到期内容。可以去知识库挑一个知识点做自测。")
+    for index, row in enumerate(candidates[:8], start=1):
+        point = point_map[row.get("knowledge_id")]
+        mastery = round(float(row.get("mastery_score") or 0) * 100)
+        title = point.get("knowledge_name") or "未命名知识点"
+        with st.expander(f"{index}. {title} · 当前掌握 {mastery}%", expanded=False):
+            st.caption("先在脑子里讲一遍，再决定要不要看提示。")
+            hint_key = f"pk_review_hint_open_{user_id}_{subject}_{point.get('id')}"
+            hint_col, know_col, again_col, quiz_col = st.columns(4)
+            with hint_col:
+                if st.button("查看提示", key=f"pk_review_hint_{point.get('id')}", use_container_width=True):
+                    st.session_state[hint_key] = not st.session_state.get(hint_key, False)
+            with know_col:
+                if st.button("记住了", key=f"pk_review_good_{point.get('id')}", use_container_width=True):
+                    _save_professional_study_result(
+                        user_id,
+                        subject,
+                        point,
+                        "review",
+                        f"复习：{title}",
+                        "本次能够完整回忆",
+                        {"score": 85, "feedback": "已完成本次回忆。", "rating": "good"},
+                    )
+                    _queue_toast(f"已记录“{title}”")
+                    st.rerun()
+            with again_col:
+                if st.button("还不熟", key=f"pk_review_again_{point.get('id')}", use_container_width=True):
+                    _save_professional_study_result(
+                        user_id,
+                        subject,
+                        point,
+                        "review",
+                        f"复习：{title}",
+                        "本次未能完整回忆",
+                        {"score": 35, "feedback": "已安排近期再次复习。", "rating": "again"},
+                    )
+                    _queue_toast(f"“{title}”会很快再出现")
+                    st.rerun()
+            with quiz_col:
+                if st.button("出一道题", key=f"pk_review_quiz_{point.get('id')}", use_container_width=True):
+                    _start_professional_study(user_id, subject, point, "application", "review")
+                    st.rerun()
+            if st.session_state.get(hint_key):
+                st.markdown(point.get("core_definition") or point.get("content") or "暂无摘要。")
+    _render_professional_study_panel(user_id, subject, point_map, "review")
+    _render_saved_question_review(user_id, subject, point_map)
+
+
+def _render_saved_question_review(user_id, subject, point_map):
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        saved_questions = list_saved_questions(conn, user_id, subject, limit=50)
+    finally:
+        conn.close()
+    st.markdown("---")
+    st.markdown("**题目复练**")
+    if not saved_questions:
+        st.caption("知识库里点“保存本题”后，题目会出现在这里反复练。")
+        return
+    st.caption(f"已保存 {len(saved_questions)} 道题。每次在知识库保存的新题都会留在这里，不会覆盖旧题。")
+    with st.expander("查看已保存题目", expanded=len(saved_questions) <= 3):
+        for index, item in enumerate(saved_questions, start=1):
+            title = item.get("knowledge_name") or "自定义题"
+            mode = _question_mode_label(item.get("source_mode"))
+            practiced = item.get("practice_count") or 0
+            st.markdown(f"**{index}. {title} · {mode} · 已练 {practiced} 次**")
+            st.caption(str(item.get("question") or "")[:160])
+
+    options = [str(item["id"]) for item in saved_questions]
+    question_map = {str(item["id"]): item for item in saved_questions}
+    selected_id = st.radio(
+        "选择保存过的题目",
+        options,
+        format_func=lambda item_id: (
+            f"{question_map[item_id].get('knowledge_name') or '自定义题'} · "
+            f"{_question_mode_label(question_map[item_id].get('source_mode'))} · "
+            f"已练 {question_map[item_id].get('practice_count') or 0} 次"
+        ),
+        key=f"pk_saved_question_select_{user_id}_{subject}",
+    )
+    saved = question_map[selected_id]
+    st.info(saved.get("question") or "题干为空。")
+    answer_key = f"pk_saved_question_answer_{selected_id}"
+    answer = st.text_area(
+        "复练回答",
+        placeholder="按正式答题写一遍，再提交反馈。",
+        height=150,
+        key=answer_key,
+    )
+    col1, col2 = st.columns([1.6, 1])
+    with col1:
+        submitted = st.button(
+            "提交复练并记录",
+            key=f"pk_saved_question_submit_{selected_id}",
+            type="primary",
+            use_container_width=True,
+        )
+    with col2:
+        if st.button("只标记练过", key=f"pk_saved_question_mark_{selected_id}", use_container_width=True):
+            conn = sqlite3.connect(MEMORY_DB)
+            try:
+                mark_saved_question_practiced(conn, int(selected_id))
+                conn.commit()
+            finally:
+                conn.close()
+            _queue_toast("已记录一次复练")
+            st.rerun()
+    if submitted:
+        if not answer.strip():
+            st.warning("先写一下你的答案再提交。")
+            return
+        point = point_map.get(saved.get("knowledge_id")) or {}
+        grading_points = _parse_json_list(saved.get("grading_points_json"))
+        result = _grade_professional_answer(
+            point,
+            saved.get("question") or "",
+            answer.strip(),
+            saved.get("reference_answer") or "",
+            grading_points,
+            "saved_question_review",
+            use_ai=False,
+        )
+        conn = sqlite3.connect(MEMORY_DB)
+        try:
+            record_study_result(
+                conn,
+                user_id=user_id,
+                subject=subject,
+                knowledge_id=saved.get("knowledge_id"),
+                study_mode="saved_question_review",
+                question=saved.get("question") or "",
+                user_answer=answer.strip(),
+                feedback=result.get("feedback") or "",
+                score=result.get("score") or 0,
+                rating=result.get("rating") or "again",
+            )
+            mark_saved_question_practiced(conn, int(selected_id))
+            conn.commit()
+        finally:
+            conn.close()
+        st.session_state[f"pk_saved_question_result_{selected_id}"] = result
+        st.rerun()
+    result = st.session_state.get(f"pk_saved_question_result_{selected_id}")
+    if result:
+        st.markdown(f"**本次得分：{result.get('score', 0)} / 100**")
+        st.write(result.get("feedback") or "已记录。")
+        _render_grade_details(result)
+
+
+def _render_professional_feynman(user_id, subject, points):
+    if not points:
+        st.info("先让知识库里有内容，再来做费曼练习。")
+        return
+    point_map = {str(point.get("id")): point for point in points if point.get("id") is not None}
+    options = list(point_map)
+    selected_id = st.selectbox(
+        "选择一个知识点",
+        options,
+        format_func=lambda item: point_map[item].get("knowledge_name") or "未命名知识点",
+        key=f"pk_feynman_point_{user_id}_{subject}",
+    )
+    point = point_map[selected_id]
+    mode = st.radio(
+        "练习方式",
+        ["讲清一个概念", "讲透一道题"],
+        horizontal=True,
+        key=f"pk_feynman_mode_{user_id}_{subject}",
+    )
+    default_question = (
+        f"请把“{point.get('knowledge_name')}”讲给一个刚接触这门课的人听。"
+        if mode == "讲清一个概念"
+        else f"请围绕“{point.get('knowledge_name')}”写出一道典型题的完整解题思路。"
+    )
+    custom_question = st.text_input(
+        "这次要讲什么",
+        value=default_question,
+        key=f"pk_feynman_question_{user_id}_{subject}_{mode}",
+    )
+    reference_answer = point.get("core_definition") or point.get("source_text") or point.get("content") or ""
+    grading_points = _parse_json_list(point.get("keywords_json"))
+    st.caption("评分看四件事：概念是否讲准、关键条件是否完整、能不能用自己的话讲明白、有没有指出易混点或解题步骤。")
+    answer = st.text_area(
+        "用自己的话讲一遍",
+        placeholder="别翻资料，先按自己的理解写。讲不顺的地方，通常就是还没真正弄懂的地方。",
+        height=190,
+        key=f"pk_feynman_answer_{user_id}_{subject}_{mode}",
+    )
+    result_key = f"pk_feynman_result_{user_id}_{subject}"
+    if st.button("提交讲解", type="primary", use_container_width=True, key=f"pk_feynman_submit_{user_id}_{subject}"):
+        if not answer.strip():
+            st.warning("先写下你的讲解再提交。")
+        else:
+            with st.spinner("正在批改讲解..."):
+                result = _grade_professional_answer(
+                    point,
+                    custom_question,
+                    answer.strip(),
+                    reference_answer,
+                    grading_points,
+                    "feynman_concept" if mode == "讲清一个概念" else "feynman_problem",
+                    use_ai=bool(os.environ.get("AI_API_KEY", "").strip()),
+                )
+            _save_professional_study_result(
+                user_id,
+                subject,
+                point,
+                "feynman",
+                custom_question,
+                answer.strip(),
+                result,
+            )
+            st.session_state[result_key] = result
+            st.rerun()
+    if st.session_state.get(result_key):
+        result = st.session_state[result_key]
+        st.markdown(f"**本次得分：{result.get('score', 0)} / 100**")
+        st.write(result.get("feedback") or "本次讲解已记录。")
+        _render_grade_details(result)
+        with st.expander("参考答案和评分标准", expanded=False):
+            st.markdown("**参考答案**")
+            st.markdown(reference_answer or "暂无标准答案，先以知识库核心内容为准。")
+            if grading_points:
+                st.markdown("**关键词/得分点**")
+                st.markdown("、".join(grading_points))
+            st.markdown("**评分标准**")
+            st.markdown("概念准确、条件完整、表达清楚、能举例或指出易混点；讲题时还要看步骤、依据和结论是否闭合。")
+
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        history = list_recent_study_records(
+            conn,
+            user_id,
+            subject,
+            study_mode="feynman",
+            limit=8,
+        )
+    finally:
+        conn.close()
+    if history:
+        st.markdown("**最近练习**")
+        for item in history:
+            title = item.get("knowledge_name") or item.get("question") or "自定义练习"
+            with st.expander(f"{title} · {item.get('score', 0)} 分 · {str(item.get('created_at') or '')[:16]}"):
+                st.markdown(f"**你的讲解**\n\n{item.get('user_answer') or '未记录'}")
+                st.markdown(f"**反馈**\n\n{item.get('feedback') or '暂无反馈'}")
+
+
+def _render_professional_memory_system(user_id, subject, points):
+    if not points:
+        st.info("上传资料并整理出知识点后，这里会开始记录掌握情况。")
+        return
+    point_map = {point.get("id"): point for point in points if point.get("id") is not None}
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        rows = list_memory_states(conn, user_id, subject)
+    finally:
+        conn.close()
+    rows = [row for row in rows if row.get("knowledge_id") in point_map]
+    mastered = sum(float(row.get("mastery_score") or 0) >= 0.80 for row in rows)
+    learning = sum(
+        0 < int(row.get("review_count") or 0)
+        and 0.45 <= float(row.get("mastery_score") or 0) < 0.80
+        for row in rows
+    )
+    due = sum(_memory_due(row) for row in rows)
+    average = round(sum(float(row.get("mastery_score") or 0) for row in rows) / max(1, len(rows)) * 100)
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("知识点", len(rows))
+    metric_cols[1].metric("已掌握", mastered)
+    metric_cols[2].metric("学习中", learning)
+    metric_cols[3].metric("今日待复习", due)
+    st.markdown(
+        f"""
+        <div class="pk-memory-progress">
+            <div class="pk-memory-progress-top">
+                <span>已验证掌握度</span>
+                <span>{average}%</span>
+            </div>
+            <div class="pk-memory-progress-track">
+                <div class="pk-memory-progress-fill" style="width:{max(0, min(100, average))}%"></div>
+            </div>
+            <div class="pk-memory-progress-note">
+                初始知识点按 0% 计算；只有完成自测、复习或手动标记后，掌握度才会上升。
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    status_filter = st.radio(
+        "查看范围",
+        ["全部", "待复习", "学习中", "已掌握"],
+        horizontal=True,
+        key=f"pk_memory_filter_{user_id}_{subject}",
+    )
+    filtered = []
+    for row in rows:
+        score = float(row.get("mastery_score") or 0)
+        reviewed = int(row.get("review_count") or 0) > 0
+        status = "已掌握" if score >= 0.80 else "学习中" if reviewed and score >= 0.45 else "待复习"
+        if status_filter == "全部" or status_filter == status:
+            row = dict(row)
+            row["display_status"] = status
+            filtered.append(row)
+
+    for row in filtered[:50]:
+        point = point_map[row.get("knowledge_id")]
+        score = round(float(row.get("mastery_score") or 0) * 100)
+        due_text = "现在" if _memory_due(row) else str(row.get("next_review") or "")[:10]
+        score_text = f"{score}%" if int(row.get("review_count") or 0) > 0 or score > 0 else "未开始"
+        st.markdown(
+            f"""
+            <div class="pk-memory-row">
+                <span>{_escape_html(point.get('knowledge_name') or '未命名知识点')}</span>
+                <span class="pk-memory-score">{_escape_html(score_text)}</span>
+                <span>{_escape_html(row.get('display_status'))} · {due_text}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        due_col, mastered_col = st.columns(2)
+        with due_col:
+            if st.button("加入今天复习", key=f"pk_memory_due_{point.get('id')}", use_container_width=True):
+                conn = sqlite3.connect(MEMORY_DB)
+                try:
+                    set_review_due_now(conn, user_id, subject, point.get("id"))
+                    conn.commit()
+                finally:
+                    conn.close()
+                _queue_toast(f"已把“{point.get('knowledge_name')}”加入今天复习")
+                st.rerun()
+        with mastered_col:
+            if st.button("标记已掌握", key=f"pk_memory_mastered_{point.get('id')}", use_container_width=True):
+                _save_professional_study_result(
+                    user_id,
+                    subject,
+                    point,
+                    "manual",
+                    f"手动标记：{point.get('knowledge_name')}",
+                    "已掌握",
+                    {"score": 92, "feedback": "已手动标记为掌握。", "rating": "easy"},
+                )
+                _queue_toast(f"已掌握“{point.get('knowledge_name')}”")
+                st.rerun()
+
+
+def _render_professional_study_workspace(user_id, subject, sources):
+    points = _load_professional_points(user_id, subject)
+    nav_key = f"pk_workspace_view_{user_id}_{subject}"
+    nav_options = ["知识库", "复习挑战", "费曼学习法", "记忆系统", "高级知识条目管理"]
+    if st.session_state.get(nav_key) not in nav_options:
+        st.session_state[nav_key] = "知识库"
+    active_view = st.radio(
+        "专业课功能",
+        nav_options,
+        horizontal=True,
+        key=nav_key,
+        label_visibility="collapsed",
+    )
+    if active_view == "知识库":
+        _render_professional_knowledge_library(user_id, subject, points, sources)
+    elif active_view == "复习挑战":
+        _render_professional_review_challenge(user_id, subject, points)
+    elif active_view == "费曼学习法":
+        _render_professional_feynman(user_id, subject, points)
+    elif active_view == "记忆系统":
+        _render_professional_memory_system(user_id, subject, points)
+    else:
+        _render_private_repository(user_id, subject=subject, show_study_tools=True)
+
+
 def render_knowledge_page():
     """Render the source-first professional course workbench."""
     user_id = st.session_state.get("user_id", 1)
@@ -3496,6 +5738,19 @@ def render_knowledge_page():
                     <h1>专业课学习</h1>
                     <p>资料识别 · 提纲整理 · 来源问答 · 知识库 · 背诵提纲 PDF</p>
                 </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="pk-start-guide">
+            <div class="pk-start-guide-title">从这里开始</div>
+            <div class="pk-start-guide-body">
+                <p>先选专业课；没有就新建一门。408 已内置知识库，其他专业课先填清考试科目，后面会按科目整理。</p>
+                <p>资料建议从目标院校最新考纲开始，再补参考书、讲义、真题回忆和老师重点。上传后，左边勾选资料，右边可以直接问“怎么背、哪里常考、哪些说法不一样”。</p>
+                <p>确认后的知识点会进入下方知识库。你可以展开学习、让 AI 出题、保存题目到复习挑战，也可以用费曼学习法检查自己是否真的讲清楚。</p>
             </div>
         </div>
         """,
@@ -3543,17 +5798,19 @@ def render_knowledge_page():
                 if not uploaded_files:
                     st.warning("请先选择资料文件。")
                 else:
-                    with st.spinner("正在识别并整理资料..."):
-                        processed, indexed, upload_warnings = _process_workbench_uploads(
-                            user_id, selected_subject, uploaded_files
-                        )
-                    if processed:
-                        _queue_toast(f"已添加 {processed} 份资料，整理出 {indexed} 个知识点")
+                    queued, upload_warnings = _queue_workbench_uploads(
+                        user_id,
+                        selected_subject,
+                        uploaded_files,
+                    )
+                    if queued:
+                        _queue_toast(f"已接收 {queued} 份资料，正在后台整理")
                     if upload_warnings:
                         st.session_state["_workbench_upload_warnings"] = upload_warnings
                     st.rerun()
 
             st.markdown(f'<div class="pk-source-count">{len(sources)} 个来源</div>', unsafe_allow_html=True)
+            _render_workbench_task_status(user_id, selected_subject)
             if not sources:
                 st.caption("上传第一份资料后，来源会显示在这里。")
             for source in sources:
@@ -3576,17 +5833,11 @@ def render_knowledge_page():
                             use_container_width=True,
                         ):
                             try:
-                                with st.spinner("正在重新识别并生成知识点..."):
-                                    indexed, reprocess_warnings = _reprocess_subject_source(
-                                        user_id,
-                                        source,
-                                    )
+                                _queue_workbench_reprocess(user_id, source)
                             except Exception as exc:
-                                st.error(f"重新整理失败：{exc}")
+                                st.error(f"重新整理任务创建失败：{exc}")
                             else:
-                                _queue_toast(f"已按新规则整理出 {indexed} 个知识点")
-                                if reprocess_warnings:
-                                    st.session_state["_workbench_upload_warnings"] = reprocess_warnings[-5:]
+                                _queue_toast("已开始后台重新整理")
                                 st.rerun()
 
                         st.caption(f"删除“{label}”及其关联知识点；错题记录会保留。")
@@ -3632,35 +5883,75 @@ def render_knowledge_page():
             unsafe_allow_html=True,
         )
 
-        suggestion = None
         st.markdown("**你可以这样问**")
-        s1, s2, s3 = st.columns(3)
-        with s1:
-            if st.button("梳理知识框架", use_container_width=True, key="pk_suggest_outline"):
-                suggestion = "请根据已选资料梳理完整的知识框架，并标出各部分之间的关系。"
-        with s2:
-            if st.button("总结高频考点", use_container_width=True, key="pk_suggest_exam"):
-                suggestion = "请总结已选资料中的高频考点、典型考法和容易混淆的地方。"
-        with s3:
-            if st.button("生成复习清单", use_container_width=True, key="pk_suggest_review"):
-                suggestion = "请基于已选资料生成一份由浅入深的复习清单。"
+        chat_slots = {
+            "outline": (
+                "梳理知识框架",
+                "请根据已选资料梳理完整的知识框架，并标出各部分之间的关系。",
+            ),
+            "exam": (
+                "总结高频考点",
+                "请总结已选资料中的高频考点、典型考法和容易混淆的地方。",
+            ),
+            "review": (
+                "生成复习清单",
+                "请基于已选资料生成一份由浅入深的复习清单。",
+            ),
+        }
+        active_chat_key = f"pk_active_chat_slot_{user_id}_{selected_subject}"
+        cache_key = f"pk_chat_answer_cache_v2_{user_id}_{selected_subject}"
+        pending_key = f"pk_chat_pending_jobs_v1_{user_id}_{selected_subject}"
+        source_signature = ",".join(str(item) for item in sorted(selected_source_ids))
+        answer_cache = st.session_state.setdefault(cache_key, {})
+        pending_jobs = st.session_state.setdefault(pending_key, {})
+        _sync_pending_chat_jobs(answer_cache, pending_jobs)
+        s1, s2, s3, status_col = st.columns([1, 1, 1, 1.05])
+        with status_col:
+            pending_active = bool(pending_jobs)
+            if pending_active:
+                if st.button("刷新", key=f"pk_chat_refresh_{selected_subject}", use_container_width=True):
+                    st.rerun()
+            else:
+                st.empty()
+        for column, (slot_key, (slot_label, slot_prompt)) in zip(
+            (s1, s2, s3),
+            chat_slots.items(),
+        ):
+            with column:
+                if st.button(slot_label, use_container_width=True, key=f"pk_suggest_{slot_key}"):
+                    st.session_state[active_chat_key] = slot_key
+                    cache_id = _chat_cache_id(slot_key, slot_prompt, source_signature)
+                    if cache_id not in answer_cache and cache_id not in pending_jobs:
+                        pending_jobs[cache_id] = _start_chat_answer_background(
+                            user_id,
+                            selected_subject,
+                            selected_source_ids,
+                            slot_prompt,
+                            slot_key,
+                            cache_id,
+                        )
+                        _sync_chat_answer_from_job(answer_cache, cache_id, pending_jobs[cache_id])
+                        if cache_id in answer_cache:
+                            pending_jobs.pop(cache_id, None)
+                    st.rerun()
 
-        history_key = f"pk_chat_history_{user_id}_{selected_subject}"
-        history = st.session_state.setdefault(history_key, [])
-        visible_history = history[-8:]
-        visible_start = max(0, len(history) - len(visible_history))
-        previous_prompt = ""
-        for offset, message in enumerate(visible_history):
-            if message["role"] == "user":
-                previous_prompt = message["content"]
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-                if message["role"] == "assistant":
+        active_slot = st.session_state.get(active_chat_key)
+        if active_slot in chat_slots:
+            slot_label, slot_prompt = chat_slots[active_slot]
+            cache_id = _chat_cache_id(active_slot, slot_prompt, source_signature)
+            cached = answer_cache.get(cache_id)
+            if not cached and cache_id in pending_jobs:
+                _show_inline_job_notice(f"正在生成“{slot_label}”")
+            if cached:
+                with st.chat_message("user"):
+                    st.markdown(cached["prompt"])
+                with st.chat_message("assistant"):
+                    st.markdown(cached["answer"])
                     try:
                         answer_pdf = build_chat_answer_pdf(
-                            message["content"],
+                            cached["answer"],
                             subject=selected_subject,
-                            prompt=previous_prompt,
+                            prompt=cached["prompt"],
                         )
                     except (OSError, RuntimeError, ValueError):
                         pass
@@ -3668,9 +5959,9 @@ def render_knowledge_page():
                         st.download_button(
                             "导出本回答精简版 PDF",
                             data=answer_pdf,
-                            file_name=chat_answer_pdf_filename(selected_subject, previous_prompt),
+                            file_name=chat_answer_pdf_filename(selected_subject, cached["prompt"]),
                             mime="application/pdf",
-                            key=f"download_chat_answer_pdf_{visible_start + offset}",
+                            key=f"download_chat_answer_pdf_{active_slot}_{source_signature or 'builtin'}",
                         )
 
         with st.form("professional_source_chat_v1", clear_on_submit=True):
@@ -3680,15 +5971,34 @@ def render_knowledge_page():
                 label_visibility="collapsed",
             )
             ask_submitted = st.form_submit_button("发送", type="primary", use_container_width=True)
-        prompt = suggestion or (question.strip() if ask_submitted else "")
+        prompt = question.strip() if ask_submitted else ""
         if prompt:
-            history.append({"role": "user", "content": prompt})
-            with st.spinner("正在阅读已选资料..."):
-                answer = _answer_subject_question(
-                    user_id, selected_subject, selected_source_ids, prompt
+            st.session_state[active_chat_key] = "custom"
+            custom_cache_id = _chat_cache_id("custom", prompt, source_signature)
+            if custom_cache_id not in answer_cache and custom_cache_id not in pending_jobs:
+                pending_jobs[custom_cache_id] = _start_chat_answer_background(
+                    user_id,
+                    selected_subject,
+                    selected_source_ids,
+                    prompt,
+                    "custom",
+                    custom_cache_id,
                 )
-            history.append({"role": "assistant", "content": answer})
+                _sync_chat_answer_from_job(answer_cache, custom_cache_id, pending_jobs[custom_cache_id])
+                if custom_cache_id in answer_cache:
+                    pending_jobs.pop(custom_cache_id, None)
+            st.session_state[f"{active_chat_key}_custom_cache_id"] = custom_cache_id
             st.rerun()
+        if st.session_state.get(active_chat_key) == "custom":
+            custom_cache_id = st.session_state.get(f"{active_chat_key}_custom_cache_id")
+            cached = answer_cache.get(custom_cache_id)
+            if not cached and custom_cache_id in pending_jobs:
+                _show_inline_job_notice("正在生成自定义回答")
+            if cached:
+                with st.chat_message("user"):
+                    st.markdown(cached["prompt"])
+                with st.chat_message("assistant"):
+                    st.markdown(cached["answer"])
 
     st.markdown("---")
     heading_col, export_col = st.columns([3.2, 1.4], vertical_alignment="bottom")
@@ -3742,8 +6052,8 @@ def render_knowledge_page():
                     use_container_width=True,
                     type="primary",
                 )
-    _render_private_repository(
+    _render_professional_study_workspace(
         user_id,
-        subject=selected_subject,
-        show_study_tools=True,
+        selected_subject,
+        sources,
     )
