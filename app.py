@@ -7354,7 +7354,7 @@ with mid_col:
         log_visit("提问", f"{query[:50]}")
 
         # 知识点归纳（用 ALIAS 表归一化为实际文件名）
-        if output.get("knowledge"):
+        if output and output.get("knowledge"):
             validated = []
             for kid in output["knowledge"]:
                 match = smart_match_knowledge(kid.strip())
