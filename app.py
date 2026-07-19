@@ -99,24 +99,42 @@ def _brief_llm_error(error):
 
 def _extract_upload_text_locally(file_bytes):
     if not file_bytes:
-        return ""
+        return {"text": "", "quality": 0.0, "engine": "none"}
     try:
         result = extract_text_adaptively(file_bytes, allow_paddle_fallback=True)
         text = (result.text or "").strip()
+        quality = float(result.quality_score or 0.0)
+        engine = result.engine or "local"
     except Exception:
         text = ""
+        quality = 0.0
+        engine = "local"
     if text:
-        return re.sub(r"\n{3,}", "\n\n", text)
+        return {"text": re.sub(r"\n{3,}", "\n\n", text), "quality": quality, "engine": engine}
     try:
         import requests
         img_b64 = base64.b64encode(file_bytes).decode()
         resp = requests.post(f"{UMI_OCR_URL}/api/ocr", json={"base64": img_b64}, timeout=20)
         if resp.ok:
             text = (resp.json().get("text") or "").strip()
-            return re.sub(r"\n{3,}", "\n\n", text)
+            return {"text": re.sub(r"\n{3,}", "\n\n", text), "quality": 0.75 if text else 0.0, "engine": "UMI-OCR"}
     except Exception:
         pass
-    return ""
+    return {"text": "", "quality": 0.0, "engine": "none"}
+
+
+def _is_generic_image_question(text):
+    normalized = re.sub(r"[\s，。！？?!.、:：；;]+", "", text or "")
+    return normalized in {"", "解答", "求解", "帮我解答", "帮我看看", "做题", "答案", "解析", "请解答"}
+
+
+def _looks_like_complete_math_question(text):
+    text = (text or "").strip()
+    if len(text) < 18:
+        return False
+    has_task = bool(re.search(r"(求|计算|证明|判断|解|为何|为什么|极限|导数|积分|概率|矩阵|方程|函数)", text))
+    has_math = bool(re.search(r"[$=+\-*/^_]|\\(?:frac|lim|int|sum|sin|cos|tan|ln|log)", text))
+    return has_task and has_math
 
 # 考纲分类：数学一独有 / 数学三独有
 MATH1_ONLY = {"020", "065", "067", "068", "069", "083", "084", "085", "086", "087", "101", "102", "103", "104", "105", "106", "109"}
@@ -4660,8 +4678,20 @@ if st.session_state.page == "main":
                     import base64 as _b64
                     img_bytes = _upload.read()
                     img_b64 = _b64.b64encode(img_bytes).decode()
-                    local_ocr_text = _extract_upload_text_locally(img_bytes)
+                    local_ocr = _extract_upload_text_locally(img_bytes)
+                    local_ocr_text = local_ocr["text"]
                     if local_ocr_text:
+                        if (
+                            local_ocr["quality"] < 0.55
+                            and not _looks_like_complete_math_question(local_ocr_text)
+                        ):
+                            st.warning(
+                                f"这张图只识别到一部分内容（{local_ocr['engine']}，质量 {local_ocr['quality']:.2f}）。"
+                                "为了避免乱答，请补充完整题干，或换一张更清晰的截图。"
+                            )
+                            with st.expander("查看当前识别到的文字"):
+                                st.text(local_ocr_text)
+                            st.stop()
                         user_input = local_ocr_text
                     else:
                         ocr_prompt = """识别这张考研题目图片中的题干与公式。禁止输出思维链、分析、解题过程或说明。
@@ -4694,8 +4724,21 @@ if st.session_state.page == "main":
                     import base64 as _b64
                     img_bytes = _upload.read()
                     img_b64 = _b64.b64encode(img_bytes).decode()
-                    local_ocr_text = _extract_upload_text_locally(img_bytes)
+                    local_ocr = _extract_upload_text_locally(img_bytes)
+                    local_ocr_text = local_ocr["text"]
                     if local_ocr_text:
+                        if (
+                            _is_generic_image_question(user_input)
+                            and local_ocr["quality"] < 0.55
+                            and not _looks_like_complete_math_question(local_ocr_text)
+                        ):
+                            st.warning(
+                                f"这张图只识别到一部分内容（{local_ocr['engine']}，质量 {local_ocr['quality']:.2f}）。"
+                                "为了避免乱答，请补充完整题干，或换一张更清晰的截图。"
+                            )
+                            with st.expander("查看当前识别到的文字"):
+                                st.text(local_ocr_text)
+                            st.stop()
                         user_input = f"{user_input}\n\n[题目截图识别文字]\n{local_ocr_text}"
                     else:
                         user_input += "\n[附题目截图]"
@@ -4736,7 +4779,7 @@ if st.session_state.page == "main":
                 if description_text.strip():
                     st.markdown(f'<div style="color:#4f46e5;font-size:0.9em;margin-bottom:8px;">📝 {_escape_md(description_text.strip())}</div>', unsafe_allow_html=True)
                 answer_placeholder = st.empty()
-                _typing_display(answer_placeholder, _escape_md(_collapse_math(_fix_latex(answer_text.strip()))), delay=0.02)
+                _typing_display(answer_placeholder, _escape_md(_collapse_math(_prepare_math_for_display(answer_text.strip()))), delay=0.02)
                 _katex_refresh()
                 st.session_state._last_answer_text = answer_text.strip()
             else:
@@ -4783,7 +4826,7 @@ if st.session_state.page == "main":
         # --- 问答后交互按钮（_ask 块外，rerun 后仍可渲染）---
         if not (_ask and (_q.strip() or _upload)) and st.session_state.get("_last_answer_text"):
             st.markdown("### 回答")
-            answer_text = _escape_md(_collapse_math(_fix_latex(st.session_state._last_answer_text)))
+            answer_text = _escape_md(_collapse_math(_prepare_math_for_display(st.session_state._last_answer_text)))
             st.markdown(f'<div class="qa-card">{answer_text}</div>', unsafe_allow_html=True)
             _katex_refresh()
             last_results = st.session_state.get("_last_results", [])
