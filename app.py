@@ -17,7 +17,6 @@ import urllib.request
 import urllib.error
 import re
 import traceback
-import secrets
 import io
 import kaoyan_predict
 from recommend import generate_recommendation
@@ -33,6 +32,17 @@ from wrongbook_utils import (
     parse_smart_answer_output,
     save_wrongbook_payload,
     split_wrongbook_answer_explanation,
+)
+from services.auth_service import (
+    activate_authenticated_user,
+    authenticate_user,
+    create_login_session,
+    ensure_auth_schema,
+    register_user as register_authenticated_user,
+    revoke_login_session,
+    require_user_id,
+    verify_login_session,
+    clear_user_session_state,
 )
 
 load_dotenv(Path(__file__).with_name(".env"))
@@ -815,37 +825,13 @@ def get_cookie_manager():
 
 cookie_manager = get_cookie_manager()
 
-def generate_login_token():
-    """生成 64 字符随机 token"""
-    return secrets.token_hex(32)
-
-def save_login_token(user_id, token):
-    """将 token 存入数据库"""
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("UPDATE users SET login_token=? WHERE id=?", (token, user_id))
-    conn.commit()
-    conn.close()
-
-def verify_login_token(token):
-    """验证 token，返回 user_id 或 None"""
-    if not token:
-        return None
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT id, username FROM users WHERE login_token=?", (token,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return {"user_id": row[0], "username": row[1]}
-    return None
-
-def clear_login_token(user_id):
-    """清除数据库中的 token"""
-    conn = sqlite3.connect(MEMORY_DB)
-    conn.execute("UPDATE users SET login_token=NULL WHERE id=?", (user_id,))
-    conn.commit()
-    conn.close()
+def logout_current_user():
+    """Revoke only the active browser session and wipe all identity-bound UI state."""
+    revoke_login_session(MEMORY_DB, st.session_state.get("auth_token"))
+    cookie_manager.delete("auth_token")
+    clear_user_session_state(st.session_state, preserve_keys={"cookie_manager"})
+    st.session_state.logged_in = False
+    st.session_state.page = "hub"
 
 # ==================== 核心功能 ====================
 
@@ -950,41 +936,10 @@ def get_knowledge_text(kid, corpus):
             return doc["text"]
     return ""
 
-import hashlib
-
 # ==================== 用户管理 ====================
 
-def hash_password(pw):
-    return hashlib.sha256(pw.encode()).hexdigest()
-
-def register_user(username, password):
-    """注册新用户，返回 user_id 或 None"""
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT id FROM users WHERE username=?", (username,))
-    if c.fetchone():
-        conn.close()
-        return None  # 用户名已存在
-    pw_hash = hash_password(password)
-    c.execute("INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)",
-              (username, pw_hash, username))
-    conn.commit()
-    user_id = c.lastrowid
-    conn.close()
-    return user_id
-
-def login_user(username, password):
-    """登录，返回 user_id 或 None"""
-    conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    pw_hash = hash_password(password)
-    c.execute("SELECT id FROM users WHERE username=? AND password_hash=?", (username, pw_hash))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
-
 def get_experience_file():
-    uid = st.session_state.get("user_id", 1)
+    uid = require_user_id(st.session_state)
     return Path(f"agent_experience_{uid}.md")
 
 def load_agent_experience():
@@ -1018,16 +973,8 @@ def init_memory_db():
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
 
-    # 确保 users 表
-    c.execute("""CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY, username TEXT UNIQUE, display_name TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
-    try: c.execute("SELECT password_hash FROM users LIMIT 1")
-    except: c.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
-    try: c.execute("SELECT display_name FROM users LIMIT 1")
-    except: c.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
-    try: c.execute("SELECT login_token FROM users LIMIT 1")
-    except: c.execute("ALTER TABLE users ADD COLUMN login_token TEXT")
+    # 用户和登录会话由两个 Streamlit 入口共享维护。
+    ensure_auth_schema(conn)
 
     c.execute("""CREATE TABLE IF NOT EXISTS knowledge_mastery (
         id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER DEFAULT 1,
@@ -1365,11 +1312,13 @@ def _start_wb_save_server():
                     return self._respond(413, {"success": False, "error": "图片数据过大，请减少图片数量后重试"})
                 body = self.rfile.read(length).decode("utf-8")
                 data = _json_srv.loads(body)
-                uid = data.get("user_id")
-                if not uid:
-                    return self._respond(400, {"success": False, "error": "未登录"})
+                # Never trust an iframe-provided user_id. The signed login session
+                # is the only source of ownership for this cross-component write.
+                user_info = verify_login_session(_DB_PATH, data.get("auth_token"))
+                if not user_info:
+                    return self._respond(401, {"success": False, "error": "登录已失效，请重新登录"})
                 conn = sqlite3.connect(_DB_PATH)
-                result = save_wrongbook_payload(conn, uid, data)
+                result = save_wrongbook_payload(conn, user_info["user_id"], data)
                 conn.close()
                 if result.get("ok"):
                     self._respond(200, {"success": True, "updated": bool(result.get("updated"))})
@@ -2399,6 +2348,8 @@ def _append_debug_log(entry):
 
 def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3, image_base64=None):
     """调用 LLM API（非流式）+ 调试日志 + 自动重试。image_base64 为 data:image/...;base64,... 格式"""
+    if not API_KEY:
+        raise RuntimeError("AI 服务尚未配置：请在项目根目录的 .env 中设置 AI_API_KEY 后重启应用。")
     _init_debug_log()
     t0 = datetime.now()
     log_entry = {
@@ -2788,7 +2739,7 @@ PROBLEM_EVAL_PROMPT = """你是考研数学辅导专家，同时也是教育心�
 
 def update_memory(kid, is_mastered, error_type="", mastery_score=0):
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_user_id(st.session_state)
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("SELECT times_correct, times_wrong, stability FROM knowledge_mastery WHERE knowledge_id=? AND user_id=?", (kid, uid))
@@ -2823,7 +2774,7 @@ def update_memory(kid, is_mastered, error_type="", mastery_score=0):
 
 def add_to_wrongbook(question, correct_answer, user_answer="", explanation="", subject=""):
     """通用：将错题写入 user_wrong_questions 表"""
-    uid = st.session_state.get("user_id", 1)
+    uid = require_user_id(st.session_state)
     init_memory_db()
     payload = {
         "subject": subject,
@@ -2894,7 +2845,7 @@ def _extract_wrongbook_question_locally(question="", correct_answer="", user_ans
     return _clean_extracted_question(question)
 
 def _record_qa_knowledge(docs):
-    uid = st.session_state.get("user_id", 1)
+    uid = require_user_id(st.session_state)
     try:
         init_memory_db()
         conn = sqlite3.connect(MEMORY_DB)
@@ -2910,7 +2861,7 @@ def _record_qa_knowledge(docs):
 
 def get_memory_stats():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_user_id(st.session_state)
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM knowledge_mastery WHERE status='掌握' AND user_id=?", (uid,))
@@ -2924,7 +2875,7 @@ def get_memory_stats():
 
 def get_weak_points():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_user_id(st.session_state)
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("""SELECT knowledge_id, times_wrong, times_correct, status, stability, error_type
@@ -2939,7 +2890,7 @@ def get_weak_points():
 
 def get_review_candidates():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_user_id(st.session_state)
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("""SELECT knowledge_id, mastery_level, status, stability, last_review
@@ -4116,19 +4067,21 @@ init_memory_db()
 if not st.session_state.logged_in:
     token = cookie_manager.get("auth_token")
     if token:
-        user_info = verify_login_token(token)
+        user_info = verify_login_session(MEMORY_DB, token)
         if user_info:
-            st.session_state.logged_in = True
-            st.session_state.user_id = user_info["user_id"]
-            st.session_state.username = user_info["username"]
+            activate_authenticated_user(
+                st.session_state,
+                user_info,
+                token,
+                preserve_keys={"cookie_manager"},
+            )
             st.rerun()
+        cookie_manager.delete("auth_token")
 
 if not st.session_state.logged_in:
     # ─── 登录/注册页 ───
     if not API_KEY:
-        st.warning("⚠️ 未设置 API Key。请设置环境变量 `AI_API_KEY` 后重启。")
-        st.code("export AI_API_KEY='sk-xxx'  # Linux/Mac\nset AI_API_KEY=sk-xxx  # Windows", language="bash")
-        st.stop()
+        st.warning("AI 服务尚未配置；你仍可注册、登录和浏览本地学习数据。需要 AI 问答、OCR 或生成内容时，请在项目根目录 .env 中设置 AI_API_KEY 后重启。")
     st.markdown("""
     <div class="main-title">
         <h1>考研学习助手</h1>
@@ -4144,14 +4097,16 @@ if not st.session_state.logged_in:
             password = st.text_input("密码", type="password")
             submitted = st.form_submit_button("登录", use_container_width=True, type="primary")
             if submitted and username and password:
-                uid = login_user(username, password)
-                if uid:
-                    token = generate_login_token()
-                    save_login_token(uid, token)
+                user_info = authenticate_user(MEMORY_DB, username, password)
+                if user_info:
+                    token = create_login_session(MEMORY_DB, user_info["user_id"])
                     cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
-                    st.session_state.logged_in = True
-                    st.session_state.user_id = uid
-                    st.session_state.username = username
+                    activate_authenticated_user(
+                        st.session_state,
+                        user_info,
+                        token,
+                        preserve_keys={"cookie_manager"},
+                    )
                     st.success("登录成功！")
                     st.rerun()
                 else:
@@ -4169,14 +4124,16 @@ if not st.session_state.logged_in:
                 elif len(new_pass) < 3:
                     st.error("密码至少3位")
                 else:
-                    uid = register_user(new_user, new_pass)
+                    uid = register_authenticated_user(MEMORY_DB, new_user, new_pass)
                     if uid:
-                        token = generate_login_token()
-                        save_login_token(uid, token)
+                        token = create_login_session(MEMORY_DB, uid)
                         cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
-                        st.session_state.logged_in = True
-                        st.session_state.user_id = uid
-                        st.session_state.username = new_user
+                        activate_authenticated_user(
+                            st.session_state,
+                            {"user_id": uid, "username": new_user},
+                            token,
+                            preserve_keys={"cookie_manager"},
+                        )
                         st.success(f"注册成功！欢迎 {new_user}")
                         st.rerun()
                     else:
@@ -4185,7 +4142,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ==================== 全局：错题保存 & 删除处理（必须在页面路由之前）====================
-_uid = st.session_state.get("user_id")
+_uid = require_user_id(st.session_state)
 _qp = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
 
 # ── 保存成功后跳转错题本页面（HTTP 保存方案，无 payload）──
@@ -4278,7 +4235,7 @@ with st.sidebar:
     st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
 
     # 用户信息卡片 (升级版)
-    _uid = st.session_state.get("user_id")
+    _uid = require_user_id(st.session_state)
     _study_days = 5  # 默认值
     if _uid:
         try:
@@ -4303,11 +4260,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     if st.button("退出登录", key="sidebar_logout", use_container_width=True):
-        clear_login_token(st.session_state.get("user_id", 0))
-        cookie_manager.delete("auth_token")
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.page = "hub"
+        logout_current_user()
         st.rerun()
 
 # ==================== 全局：加入错题本表单 ====================
@@ -4496,7 +4449,7 @@ if st.session_state.page == "professional_kb":
         st.stop()
 
     render_professional_knowledge_system(
-        user_id=st.session_state.get("user_id"),
+        user_id=require_user_id(st.session_state),
         username=st.session_state.get("username"),
         standalone=False,
     )
@@ -4958,7 +4911,7 @@ if st.session_state.page == "main":
                                         q_raw = quiz['questions']
                                         qm = re.search(r'Q:\s*(.+)', q_raw)
                                         display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
-                                        save_feynman_record(st.session_state.get("user_id", 1), "problem", display_q, ans, result, sc, se, sa, total)
+                                        save_feynman_record(require_user_id(st.session_state), "problem", display_q, ans, result, sc, se, sa, total)
                                         st.session_state._kb_result = result
                                         st.session_state._kb_quiz = None
                                         st.rerun()
@@ -5007,7 +4960,7 @@ if st.session_state.page == "main":
                                         if m: se = int(m.group(1))
                                         m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
                                         if m: sa = int(m.group(1))
-                                        save_feynman_record(st.session_state.get("user_id", 1), "concept", concept_quiz_text, ans, result, sc, se, sa, total)
+                                        save_feynman_record(require_user_id(st.session_state), "concept", concept_quiz_text, ans, result, sc, se, sa, total)
                                         st.session_state._kb_concept_result = result
                                         st.rerun()
                                     except Exception as e:
@@ -5140,7 +5093,7 @@ if st.session_state.page == "main":
                             if m: score_authentic = int(m.group(1))
 
                             save_feynman_record(
-                                st.session_state.get("user_id", 1),
+                                require_user_id(st.session_state),
                                 mode_key, _ftopic, _fanswer, result,
                                 score_correct, score_expression, score_authentic, total_score)
 
@@ -5152,7 +5105,7 @@ if st.session_state.page == "main":
 
             st.markdown("---")
             st.markdown("### 历史记录")
-            feynman_history = get_feynman_history(st.session_state.get("user_id", 1))
+            feynman_history = get_feynman_history(require_user_id(st.session_state))
             if feynman_history:
                 for record in feynman_history:
                     mode_label = "概念" if record["mode"] == "concept" else "解题"
@@ -5172,7 +5125,7 @@ if st.session_state.page == "main":
             <div style="font-size:0.88rem;font-weight:700;color:#1e293b;margin-bottom:14px;">知识点掌握情况</div>
             """, unsafe_allow_html=True)
             _all = len(load_corpus())
-            uid = st.session_state.get("user_id")
+            uid = require_user_id(st.session_state)
             _mastered = 0
             _cards = []
             if uid:
@@ -5273,45 +5226,32 @@ if st.session_state.page == "hub":
         </div>
         """, unsafe_allow_html=True)
     with h_right:
-        hub_user_id = st.session_state.get("user_id")
-        if hub_user_id:
-            flow_data = get_flow_focus_data(hub_user_id)
-            flow_msg = pick_flow_message(hub_user_id)
-            focus_hours = flow_data["total_hours"]
-            progress_pct = flow_data["progress_pct"]
-            # 进度颜色：绿(≥80%) / 靛(≥50%) / 琥珀(>0%) / 灰(0%)
-            if progress_pct >= 80:
-                bar_color = "#22c55e"; bg_color = "#f0fdf4"
-            elif progress_pct >= 50:
-                bar_color = "#4f46e5"; bg_color = "#eef2ff"
-            elif progress_pct > 0:
-                bar_color = "#f59e0b"; bg_color = "#fffbeb"
-            else:
-                bar_color = "#94a3b8"; bg_color = "#f8fafc"
-            st.markdown(f"""
-            <div class="qa-card" style="text-align:center;">
-                <div style="font-size:0.82rem;font-weight:700;color:#64748b;margin-bottom:6px;">⚡ 今日聚焦心流</div>
-                <div style="font-size:2.2rem;font-weight:800;color:{bar_color};">{focus_hours}
-                    <span style="font-size:0.85rem;color:#64748b;font-weight:400;">小时</span>
-                </div>
-                <div style="display:inline-flex;align-items:center;gap:6px;font-size:0.75rem;padding:4px 12px;background:{bg_color};color:{bar_color};border-radius:20px;font-weight:500;">
-                    <span style="width:6px;height:6px;border-radius:50%;background:{bar_color};"></span> {'已达每日目标 ' + str(progress_pct) + '%' if progress_pct > 0 else '今日尚未开始'}
-                </div>
-                <div style="margin-top:10px;font-size:0.78rem;color:#475569;line-height:1.5;padding:0 4px;">{flow_msg}</div>
-            </div>
-            """, unsafe_allow_html=True)
+        hub_user_id = require_user_id(st.session_state)
+        flow_data = get_flow_focus_data(hub_user_id)
+        flow_msg = pick_flow_message(hub_user_id)
+        focus_hours = flow_data["total_hours"]
+        progress_pct = flow_data["progress_pct"]
+        # 进度颜色：绿(≥80%) / 靛(≥50%) / 琥珀(>0%) / 灰(0%)
+        if progress_pct >= 80:
+            bar_color = "#22c55e"; bg_color = "#f0fdf4"
+        elif progress_pct >= 50:
+            bar_color = "#4f46e5"; bg_color = "#eef2ff"
+        elif progress_pct > 0:
+            bar_color = "#f59e0b"; bg_color = "#fffbeb"
         else:
-            st.markdown("""
-            <div class="qa-card" style="text-align:center;">
-                <div style="font-size:0.82rem;font-weight:700;color:#64748b;margin-bottom:6px;">⚡ 今日聚焦心流</div>
-                <div style="font-size:2.2rem;font-weight:800;color:#94a3b8;">—
-                    <span style="font-size:0.85rem;color:#64748b;font-weight:400;">小时</span>
-                </div>
-                <div style="display:inline-flex;align-items:center;gap:6px;font-size:0.75rem;padding:4px 12px;background:#f8fafc;color:#94a3b8;border-radius:20px;font-weight:500;">
-                    登录后开始记录
-                </div>
+            bar_color = "#94a3b8"; bg_color = "#f8fafc"
+        st.markdown(f"""
+        <div class="qa-card" style="text-align:center;">
+            <div style="font-size:0.82rem;font-weight:700;color:#64748b;margin-bottom:6px;">⚡ 今日聚焦心流</div>
+            <div style="font-size:2.2rem;font-weight:800;color:{bar_color};">{focus_hours}
+                <span style="font-size:0.85rem;color:#64748b;font-weight:400;">小时</span>
             </div>
-            """, unsafe_allow_html=True)
+            <div style="display:inline-flex;align-items:center;gap:6px;font-size:0.75rem;padding:4px 12px;background:{bg_color};color:{bar_color};border-radius:20px;font-weight:500;">
+                <span style="width:6px;height:6px;border-radius:50%;background:{bar_color};"></span> {'已达每日目标 ' + str(progress_pct) + '%' if progress_pct > 0 else '今日尚未开始'}
+            </div>
+            <div style="margin-top:10px;font-size:0.78rem;color:#475569;line-height:1.5;padding:0 4px;">{flow_msg}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -5596,7 +5536,7 @@ if st.session_state.page == "popularity":
         st.markdown("---")
         st.markdown("### 💡 个人建议")
 
-        uid = st.session_state.get("user_id", 1)
+        uid = require_user_id(st.session_state)
         profile = get_user_profile(uid)
 
         if not profile:
@@ -5832,7 +5772,8 @@ if st.session_state.page == "suggest":
 # ==================== 错题本 ====================
 if st.session_state.page == "wrongbook":
     from pathlib import Path as _Path
-    uid = st.session_state.get("user_id")
+    uid = require_user_id(st.session_state)
+    _wb_auth_token = st.session_state.get("auth_token", "")
 
     # ── 卡片删除桥接（v2：预渲染隐藏按钮）──
     # 详情见下方 — 每个错题预渲染 st.button(key="wb_iframe_del_<id>")，iframe JS 通过 CSS class 定位点击。
@@ -6195,6 +6136,7 @@ if st.session_state.page == "wrongbook":
         f"var WB_API_BASE={json.dumps(API_BASE)};"
         f"var WB_API_KEY={json.dumps(API_KEY)};"
         f"var WB_USER_ID={json.dumps(uid)};"
+        f"var WB_AUTH_TOKEN={json.dumps(_wb_auth_token)};"
         "var WB_SAVE_PORT=0;"
         f"var WB_SAVE_RESULT={json.dumps(_wb_result, ensure_ascii=False)};"
         "</script>"
@@ -6253,7 +6195,8 @@ if st.session_state.page == "wrongbook":
     _wb_save_port = _start_wb_save_server()
     html_content = html_content.replace("/*__API_CONFIG__*/",
         f'var WB_API_BASE={_json.dumps(API_BASE)};var WB_API_KEY={_json.dumps(API_KEY)};'
-        f'var WB_SAVE_PORT={_wb_save_port or "null"};var WB_USER_ID={uid or 0};')
+        f'var WB_SAVE_PORT={_wb_save_port or "null"};var WB_USER_ID={uid};'
+        f'var WB_AUTH_TOKEN={_json.dumps(_wb_auth_token)};')
 
     # Inject AI result, extracted text & save status
     if _ai_result:
@@ -6782,7 +6725,7 @@ if st.session_state.page == "checkin":
     </div>
     """, unsafe_allow_html=True)
 
-    checkin_user_id = st.session_state.get("user_id")
+    checkin_user_id = require_user_id(st.session_state)
     checkin_username = st.session_state.get("username", "用户")
 
     st.caption(f"当前用户：{checkin_username}（user_id={checkin_user_id}）")
@@ -7229,11 +7172,7 @@ with left_col:
     st.markdown("### 👤 当前用户")
     st.markdown(f"**{st.session_state.get('username','?')}**")
     if st.button("🚪 退出登录", use_container_width=True):
-        clear_login_token(st.session_state.get("user_id", 0))
-        cookie_manager.delete("auth_token")
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.page = "hub"
+        logout_current_user()
         st.rerun()
 
     st.markdown("---")
@@ -7441,7 +7380,7 @@ with mid_col:
                     # 立即验证 DB 写入
                     vconn = sqlite3.connect(MEMORY_DB)
                     vc = vconn.cursor()
-                    uid = st.session_state.get("user_id", 1)
+                    uid = require_user_id(st.session_state)
                     vc.execute("SELECT knowledge_id, status FROM knowledge_mastery WHERE knowledge_id=? AND user_id=?", (matched[0], uid))
                     verify = vc.fetchone()
                     vconn.close()
@@ -7543,7 +7482,7 @@ with tab1:
                                         q_raw = quiz['questions']
                                         qm = re.search(r'Q:\s*(.+)', q_raw)
                                         display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
-                                        save_feynman_record(st.session_state.get("user_id"), "problem", display_q, ans, result, sc, se, sa, total)
+                                        save_feynman_record(require_user_id(st.session_state), "problem", display_q, ans, result, sc, se, sa, total)
                                         st.session_state._kb_result = result
                                         st.session_state._kb_quiz = None
                                         st.rerun()
@@ -7579,7 +7518,7 @@ with tab1:
                                         if m: se = int(m.group(1))
                                         m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
                                         if m: sa = int(m.group(1))
-                                        save_feynman_record(st.session_state.get("user_id"), "concept", concept_quiz, ans, result, sc, se, sa, total)
+                                        save_feynman_record(require_user_id(st.session_state), "concept", concept_quiz, ans, result, sc, se, sa, total)
                                         st.session_state._kb_concept_result = result
                                         st.session_state._kb_concept_quiz = None
                                         st.rerun()
@@ -7636,7 +7575,7 @@ with tab1:
                                         q_raw = quiz['questions']
                                         qm = re.search(r'Q:\s*(.+)', q_raw)
                                         display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
-                                        save_feynman_record(st.session_state.get("user_id"), "problem", display_q, ans, result, sc, se, sa, total)
+                                        save_feynman_record(require_user_id(st.session_state), "problem", display_q, ans, result, sc, se, sa, total)
                                         st.session_state._kb_result = result
                                         st.session_state._kb_quiz = None
                                         st.rerun()
@@ -7672,7 +7611,7 @@ with tab1:
                                         if m: se = int(m.group(1))
                                         m = re.search(r'\[书写真实性\]\s*(\d+)/(\d+)分', result)
                                         if m: sa = int(m.group(1))
-                                        save_feynman_record(st.session_state.get("user_id"), "concept", concept_quiz, ans, result, sc, se, sa, total)
+                                        save_feynman_record(require_user_id(st.session_state), "concept", concept_quiz, ans, result, sc, se, sa, total)
                                         st.session_state._kb_concept_result = result
                                         st.session_state._kb_concept_quiz = None
                                         st.rerun()
@@ -7812,7 +7751,7 @@ with tab4:
 
                     # 保存记录
                     save_feynman_record(
-                        st.session_state.get("user_id"),
+                        require_user_id(st.session_state),
                         mode_key,
                         feynman_question,
                         feynman_answer,
@@ -7834,7 +7773,7 @@ with tab4:
     # 历史记录
     st.markdown("---")
     st.markdown("### 📜 历史记录")
-    feynman_history = get_feynman_history(st.session_state.get("user_id", 1))
+    feynman_history = get_feynman_history(require_user_id(st.session_state))
     if feynman_history:
         for record in feynman_history:
             mode_label = "概念" if record["mode"] == "concept" else "解题"
@@ -7853,7 +7792,7 @@ with tab3:
     st.subheader("知识点掌握情况")
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
-    c.execute("SELECT knowledge_id, status, times_correct, times_wrong, stability FROM knowledge_mastery WHERE user_id=? ORDER BY last_review DESC", (st.session_state.get("user_id", 1),))
+    c.execute("SELECT knowledge_id, status, times_correct, times_wrong, stability FROM knowledge_mastery WHERE user_id=? ORDER BY last_review DESC", (require_user_id(st.session_state),))
     rows = c.fetchall()
     conn.close()
     filtered_rows = [r for r in rows if r[0] in filtered_corpus_ids]

@@ -66,7 +66,15 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _run_app(self):
+        from services.auth_service import register_user
+
+        register_user(str(self.db_path), "test-user", "test-password")
         app = AppTest.from_file(str(PROJECT_DIR / "app_kb.py"), default_timeout=30).run()
+        if app.exception:
+            raise AssertionError(app.exception)
+        app.text_input[0].set_value("test-user")
+        app.text_input[1].set_value("test-password")
+        app.button[0].click().run()
         if app.exception:
             raise AssertionError(app.exception)
         return app

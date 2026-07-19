@@ -3613,7 +3613,7 @@ function saveNewQuestion() {
     fetch('/wb_save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(Object.assign({}, payload, { auth_token: (typeof WB_AUTH_TOKEN !== 'undefined' ? WB_AUTH_TOKEN : '') }))
     }).then(function(r) {
       return r.json().then(function(data) {
         if (!r.ok || !data.success) throw new Error(data.error || ('HTTP ' + r.status));
