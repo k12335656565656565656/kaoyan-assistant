@@ -100,6 +100,7 @@ from services.professional_knowledge_task_service import (
     list_recent_tasks,
     update_task_status as update_professional_task_status,
 )
+from services.auth_service import require_user_id
 
 _CHAT_JOB_LOCK = threading.Lock()
 _CHAT_JOBS = {}
@@ -397,8 +398,10 @@ def save_knowledge_points(user_id, material_id, subject, chapter_name, llm_resul
             VALUES (?, ?, ?, ?, ?, ?)""",
             (user_id, material_id, subject, chapter_name, name_kb, llm_result))
         count += 1
-    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=?",
-             (count, material_id))
+    c.execute(
+        "UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=? AND user_id=?",
+        (count, material_id, user_id),
+    )
     conn.commit()
     conn.close()
     return count
@@ -450,18 +453,18 @@ def add_wrong_question(user_id, subject, question, user_answer, correct_answer, 
     conn.close()
 
 
-def mark_wrong_mastered(question_id):
+def mark_wrong_mastered(user_id, question_id):
     """标记错题已掌握"""
     conn = sqlite3.connect(MEMORY_DB)
-    conn.execute("UPDATE user_wrong_questions SET status='mastered' WHERE id=?", (question_id,))
+    conn.execute("UPDATE user_wrong_questions SET status='mastered' WHERE id=? AND user_id=?", (question_id, user_id))
     conn.commit()
     conn.close()
 
 
-def relearn_wrong(question_id):
+def relearn_wrong(user_id, question_id):
     """重新学习错题"""
     conn = sqlite3.connect(MEMORY_DB)
-    conn.execute("UPDATE user_wrong_questions SET last_reviewed=datetime('now') WHERE id=?", (question_id,))
+    conn.execute("UPDATE user_wrong_questions SET last_reviewed=datetime('now') WHERE id=? AND user_id=?", (question_id, user_id))
     conn.commit()
     conn.close()
 
@@ -1195,7 +1198,7 @@ def _format_repo_option(point):
 
 def _render_knowledge_page_legacy():
     """渲染专业知识库页面（4 个 Tab）"""
-    user_id = st.session_state.get("user_id", 1)
+    user_id = require_user_id(st.session_state)
     _ensure_session_draft_state()
     _ensure_persist_state()
 
@@ -1582,11 +1585,11 @@ def _render_knowledge_page_legacy():
                     c1, c2 = st.columns(2)
                     with c1:
                         if st.button("✅ 标记已掌握", key=f"wrong_{wq[0]}"):
-                            mark_wrong_mastered(wq[0])
+                            mark_wrong_mastered(user_id, wq[0])
                             st.rerun()
                     with c2:
                         if st.button("🔄 重新学习", key=f"relearn_{wq[0]}"):
-                            relearn_wrong(wq[0])
+                            relearn_wrong(user_id, wq[0])
                             st.rerun()
         else:
             st.info("🎉 当前学科没有错题！")
@@ -2655,7 +2658,7 @@ def _update_knowledge_mastery(knowledge_id, mastery_state):
 
 def _render_legacy_knowledge_page(*, show_header=True, show_subject_setup=True):
     """渲染专业课知识点识别系统：资料识别、确认入库、复习发散。"""
-    user_id = st.session_state.get("user_id", 1)
+    user_id = require_user_id(st.session_state)
     _ensure_session_draft_state()
     _ensure_persist_state()
     _show_pending_toast()
@@ -5718,7 +5721,7 @@ def _render_professional_study_workspace(user_id, subject, sources):
 
 def render_knowledge_page():
     """Render the source-first professional course workbench."""
-    user_id = st.session_state.get("user_id", 1)
+    user_id = require_user_id(st.session_state)
     _show_pending_toast()
     _inject_professional_workbench_styles()
 
@@ -6001,7 +6004,7 @@ def render_knowledge_page():
                     st.markdown(cached["answer"])
 
     st.markdown("---")
-    heading_col, export_col = st.columns([3.2, 1.4], vertical_alignment="bottom")
+    heading_col, export_col = st.columns([3.2, 1.4])
     with heading_col:
         st.markdown(
             f"""

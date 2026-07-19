@@ -409,7 +409,7 @@ def render_professional_knowledge_system(
     """Render the portable professional knowledge recognition system.
 
     Host apps can pass their authenticated ``user_id`` and ``username``.
-    Standalone mode falls back to ``user_id=1`` inside ``knowledge_base``.
+    The knowledge-base renderer now requires an authenticated user context.
     """
 
     if user_id is not None:
