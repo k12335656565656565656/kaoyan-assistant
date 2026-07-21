@@ -94,6 +94,8 @@ from services.chat_answer_pdf_service import (
     chat_answer_pdf_filename,
 )
 from services.knowledge_outline_pdf_service import build_knowledge_outline_pdf
+from services.knowledge_memorization_docx_service import build_knowledge_memorization_docx
+from services.syllabus_memorization_service import generate_syllabus_memorization_points
 from services.paddle_ocr_service import is_paddle_ocr_available
 from services.professional_knowledge_task_service import (
     create_task as create_professional_task,
@@ -2060,6 +2062,41 @@ def _safe_outline_pdf_filename(subject):
     return f"{safe_subject or '专业课'}-背诵提纲.pdf"
 
 
+def _safe_memorization_docx_filename(subject):
+    safe_subject = "".join(
+        char for char in str(subject or "专业课")
+        if char not in '<>:"/\\|?*' and ord(char) >= 32
+    ).strip(" .")
+    return f"{safe_subject or '专业课'}-背诵手册.docx"
+
+
+def _memorization_docx_payload(points):
+    fields = (
+        "knowledge_name",
+        "chapter_name",
+        "core_definition",
+        "content",
+        "keywords_json",
+        "exam_question_styles_json",
+        "related_concepts_json",
+        "pitfalls_json",
+        "example_or_application",
+    )
+    payload = [
+        {field: point.get(field) for field in fields}
+        for point in points or []
+    ]
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _build_memorization_docx_cached(points_json, subject):
+    return build_knowledge_memorization_docx(
+        json.loads(points_json),
+        subject=subject,
+    )
+
+
 def _filter_repository_points(points, query):
     query = (query or "").strip().lower()
     if not query:
@@ -3837,6 +3874,167 @@ def _start_workbench_upload_background(job):
     thread.start()
 
 
+def _process_syllabus_memorization_job(job):
+    task_id = job.get("task_id") or ""
+    user_id = job.get("user_id")
+    material_id = job.get("material_id")
+    file_path = job.get("file_path") or ""
+    filename = job.get("filename") or Path(file_path).name
+    file_type = job.get("file_type") or _infer_material_file_type(filename)
+    subject = job.get("subject") or ""
+    source_hash = job.get("source_hash") or ""
+    max_points = min(100, max(10, int(job.get("max_points") or 60)))
+
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        mark_material_status(conn, material_id, "processing")
+        conn.commit()
+    finally:
+        conn.close()
+    update_professional_task_status(task_id, "processing", note="正在读取整份考试大纲")
+
+    path = Path(file_path)
+    file_bytes = None
+    if path.exists() and file_type != "pdf":
+        file_bytes = path.read_bytes()
+
+    def progress_callback(current, total, message):
+        update_professional_task_status(task_id, "processing", note=str(message or "")[:120])
+
+    try:
+        material_result = route_material_input(
+            file_name=filename,
+            file_path=file_path,
+            file_bytes=file_bytes,
+            image_ocr_fn=extract_text_from_image,
+            pdf_ocr_fn=lambda path_value: extract_text_from_pdf_paddleocr(
+                path_value,
+                progress_callback=progress_callback,
+            ),
+            pdf_outline_fn=lambda path_value: extract_pdf_outline_adaptively(
+                path_value,
+                progress_callback=progress_callback,
+            ),
+            pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()) if file_type == "pdf" else False,
+            pdf_text_progress_fn=progress_callback if file_type == "pdf" else None,
+        )
+        syllabus_text = str(material_result.extracted_text or "").strip()
+        if not syllabus_text:
+            raise ValueError("没有从大纲中读取到可用文字，请确认文件不是模糊扫描件。")
+
+        conn = sqlite3.connect(MEMORY_DB)
+        try:
+            save_extraction_result(
+                conn,
+                material_id,
+                material_result,
+                status="extracted",
+                content_hash=source_hash,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        if not os.environ.get("AI_API_KEY", "").strip():
+            raise RuntimeError("读取大纲并发散背诵内容需要配置 AI_API_KEY。")
+
+        points, warnings = generate_syllabus_memorization_points(
+            syllabus_text,
+            subject=subject,
+            max_points=max_points,
+            llm_callable=lambda prompt: _call_llm_api(
+                prompt,
+                max_tokens=6400,
+                temperature=0.2,
+            ),
+            progress_callback=progress_callback,
+        )
+        profile = get_rag_knowledge_base_by_subject(subject)
+        prepared_points = []
+        for point in points:
+            prepared, rejection_reason = prepare_knowledge_point_for_storage(
+                point,
+                subject=subject,
+            )
+            if not rejection_reason and has_meaningful_knowledge_content(prepared):
+                prepared_points.append(prepared)
+        if not prepared_points:
+            raise RuntimeError("大模型没有生成可写入知识库的背诵内容，请重试。")
+
+        conn = sqlite3.connect(MEMORY_DB)
+        try:
+            ensure_knowledge_schema(conn)
+            conn.execute(
+                "DELETE FROM user_knowledge WHERE user_id=? AND material_id=?",
+                (user_id, material_id),
+            )
+            save_confirmed_text(conn, material_id, syllabus_text, status="text_confirmed")
+            saved_count = save_confirmed_knowledge_points(
+                conn,
+                user_id,
+                prepared_points,
+                material_meta={
+                    "material_id": material_id,
+                    "subject": subject,
+                    "subject_key": profile.key if profile else "",
+                    "chapter_name": f"{subject}背诵内容",
+                    "source_type": "syllabus",
+                    "process_method": "syllabus_memorization_ai",
+                    "material_filename": filename,
+                },
+                strict=False,
+                finalize_material=True,
+            )
+            conn.execute(
+                """UPDATE user_materials
+                   SET source_type='syllabus', process_method='syllabus_memorization_ai',
+                       error_message='', updated_at=datetime('now')
+                   WHERE id=? AND user_id=?""",
+                (material_id, user_id),
+            )
+            save_workflow_snapshot(
+                conn,
+                material_id,
+                {
+                    "syllabus_memorization": True,
+                    "requested_max_points": max_points,
+                    "knowledge_count": saved_count,
+                    "warnings": warnings,
+                },
+                status="done",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        update_professional_task_status(
+            task_id,
+            "done",
+            note=f"背诵内容已生成，共 {saved_count} 个条目",
+            warning_count=len(warnings or []),
+            source_type="syllabus",
+            process_method="syllabus_memorization_ai",
+        )
+    except Exception as exc:
+        conn = sqlite3.connect(MEMORY_DB)
+        try:
+            mark_material_status(conn, material_id, "failed", error_message=str(exc))
+            conn.commit()
+        finally:
+            conn.close()
+        update_professional_task_status(task_id, "failed", note=f"大纲生成失败：{exc}")
+
+
+def _start_syllabus_memorization_background(job):
+    thread = threading.Thread(
+        target=_process_syllabus_memorization_job,
+        args=(job,),
+        name=f"syllabus-memorization-{job.get('material_id')}",
+        daemon=True,
+    )
+    thread.start()
+
+
 def _queue_workbench_reprocess(user_id, source):
     job = _create_workbench_reprocess_job(user_id, source)
     _start_workbench_upload_background(job)
@@ -3857,7 +4055,7 @@ def _queue_workbench_uploads(user_id, subject, uploaded_files):
     return queued, warnings
 
 
-def _queue_syllabus_upload(user_id, subject, uploaded_file):
+def _queue_syllabus_upload(user_id, subject, uploaded_file, *, max_points=60):
     base_name = Path(_sanitize_material_filename(uploaded_file.name)).stem
     chapter_name = f"学校考纲 - {base_name}"
     job = _create_workbench_upload_job(
@@ -3867,7 +4065,15 @@ def _queue_syllabus_upload(user_id, subject, uploaded_file):
         chapter_name=chapter_name,
     )
     job["user_id"] = user_id
-    _start_workbench_upload_background(job)
+    job["max_points"] = max_points
+    _start_syllabus_memorization_background(job)
+    return job
+
+
+def _queue_syllabus_reprocess(user_id, source, *, max_points=60):
+    job = _create_workbench_reprocess_job(user_id, source)
+    job["max_points"] = max_points
+    _start_syllabus_memorization_background(job)
     return job
 
 
@@ -3901,11 +4107,15 @@ def _render_workbench_task_status(user_id, subject):
             "failed": "失败",
         }.get(task.status, task.status)
         st.caption(f"{task.filename or task.chapter_name} · {status_label} · {task.updated_at}")
+        if task.notes:
+            st.caption(task.notes[-1])
 
 
 def _source_status_label(source):
     status = source.get("processing_status") or "pending"
     if status in {"done", "completed"}:
+        if source.get("process_method") == "syllabus_memorization_ai":
+            return f"大纲背诵 · {source.get('knowledge_count') or 0} 个条目"
         if source.get("process_method") == "pdf_outline_ai":
             return f"大纲整理 · {source.get('knowledge_count') or 0} 个知识点"
         return f"已整理 · {source.get('knowledge_count') or 0} 个知识点"
@@ -4226,6 +4436,21 @@ def _load_professional_points(user_id, subject):
         )
         ensure_memory_rows(conn, user_id, subject, points)
         conn.commit()
+        return _sort_professional_points(points)
+    finally:
+        conn.close()
+
+
+def _load_material_points(user_id, subject, material_id):
+    conn = sqlite3.connect(MEMORY_DB)
+    try:
+        points = list_user_knowledge_points(
+            conn,
+            user_id,
+            limit=1000,
+            subject=subject,
+            material_ids=[material_id],
+        )
         return _sort_professional_points(points)
     finally:
         conn.close()
@@ -5201,13 +5426,34 @@ def _render_professional_knowledge_library(user_id, subject, points, sources):
             point for point in filtered
             if _point_exam_subject(point) == exam_subject_filter
         ]
-    st.markdown(
-        f'<div class="pk-library-count">共 <strong>{len(filtered)}</strong> 个知识点</div>',
-        unsafe_allow_html=True,
-    )
     if not filtered:
         st.info("这个考试科目下暂时没有知识点。")
         return
+
+    count_col, download_col = st.columns([3.2, 1.35], vertical_alignment="center")
+    with count_col:
+        st.markdown(
+            f'<div class="pk-library-count">共 <strong>{len(filtered)}</strong> 个知识点</div>',
+            unsafe_allow_html=True,
+        )
+    with download_col:
+        try:
+            memorization_docx = _build_memorization_docx_cached(
+                _memorization_docx_payload(filtered),
+                subject,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            st.error(f"生成背诵手册失败：{exc}")
+        else:
+            st.download_button(
+                "下载背诵版 DOCX",
+                data=memorization_docx,
+                file_name=_safe_memorization_docx_filename(subject),
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="download_knowledge_memorization_docx",
+                use_container_width=True,
+                type="primary",
+            )
 
     per_page = 20
     total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
@@ -5736,7 +5982,7 @@ def render_knowledge_page():
                 </div>
                 <div>
                     <h1>专业课学习</h1>
-                    <p>资料识别 · 提纲整理 · 来源问答 · 知识库 · 背诵提纲 PDF</p>
+                    <p>资料识别 · 提纲整理 · 来源问答 · 知识库 · 背诵手册 DOCX</p>
                 </div>
             </div>
         </div>
@@ -5784,30 +6030,75 @@ def render_knowledge_page():
     with source_column:
         with st.container(border=True):
             st.markdown('<div class="pk-workbench-label">来源</div>', unsafe_allow_html=True)
-            st.markdown('<div class="pk-source-heading">添加资料</div>', unsafe_allow_html=True)
-            with st.form("workbench_source_upload_v1", clear_on_submit=True):
-                uploaded_files = st.file_uploader(
-                    "上传资料",
-                    type=["pdf", "png", "jpg", "jpeg", "txt", "md"],
-                    accept_multiple_files=True,
-                    key="workbench_source_files_v1",
-                    label_visibility="collapsed",
-                )
-                submitted = st.form_submit_button("添加来源", type="primary", use_container_width=True)
-            if submitted:
-                if not uploaded_files:
-                    st.warning("请先选择资料文件。")
-                else:
-                    queued, upload_warnings = _queue_workbench_uploads(
-                        user_id,
-                        selected_subject,
-                        uploaded_files,
+            source_mode = st.radio(
+                "添加方式",
+                ["读取大纲", "添加资料"],
+                horizontal=True,
+                key="workbench_source_mode_v1",
+            )
+            if source_mode == "读取大纲":
+                st.caption("上传考试大纲，AI 会通读全文并批量生成可直接背诵的内容。")
+                with st.form("workbench_syllabus_upload_v1", clear_on_submit=True):
+                    syllabus_file = st.file_uploader(
+                        "上传考试大纲",
+                        type=["pdf", "txt", "md"],
+                        accept_multiple_files=False,
+                        key="workbench_syllabus_file_v1",
                     )
-                    if queued:
-                        _queue_toast(f"已接收 {queued} 份资料，正在后台整理")
-                    if upload_warnings:
-                        st.session_state["_workbench_upload_warnings"] = upload_warnings
-                    st.rerun()
+                    max_syllabus_points = st.slider(
+                        "背诵条目数量",
+                        min_value=20,
+                        max_value=100,
+                        value=60,
+                        step=10,
+                        help="这是最多生成数量；AI 会先覆盖完整大纲，再按重要程度拆分。",
+                    )
+                    syllabus_submitted = st.form_submit_button(
+                        "读取大纲并生成背诵内容",
+                        type="primary",
+                        use_container_width=True,
+                    )
+                if syllabus_submitted:
+                    if not syllabus_file:
+                        st.warning("请先选择考试大纲。")
+                    else:
+                        try:
+                            _queue_syllabus_upload(
+                                user_id,
+                                selected_subject,
+                                syllabus_file,
+                                max_points=max_syllabus_points,
+                            )
+                        except Exception as exc:
+                            st.error(f"大纲任务创建失败：{exc}")
+                        else:
+                            _queue_toast("已开始读取大纲并生成背诵内容")
+                            st.rerun()
+            else:
+                st.markdown('<div class="pk-source-heading">添加资料</div>', unsafe_allow_html=True)
+                with st.form("workbench_source_upload_v1", clear_on_submit=True):
+                    uploaded_files = st.file_uploader(
+                        "上传资料",
+                        type=["pdf", "png", "jpg", "jpeg", "txt", "md"],
+                        accept_multiple_files=True,
+                        key="workbench_source_files_v1",
+                        label_visibility="collapsed",
+                    )
+                    submitted = st.form_submit_button("添加来源", type="primary", use_container_width=True)
+                if submitted:
+                    if not uploaded_files:
+                        st.warning("请先选择资料文件。")
+                    else:
+                        queued, upload_warnings = _queue_workbench_uploads(
+                            user_id,
+                            selected_subject,
+                            uploaded_files,
+                        )
+                        if queued:
+                            _queue_toast(f"已接收 {queued} 份资料，正在后台整理")
+                        if upload_warnings:
+                            st.session_state["_workbench_upload_warnings"] = upload_warnings
+                        st.rerun()
 
             st.markdown(f'<div class="pk-source-count">{len(sources)} 个来源</div>', unsafe_allow_html=True)
             _render_workbench_task_status(user_id, selected_subject)
@@ -5826,6 +6117,19 @@ def render_knowledge_page():
                 with source_action_col:
                     with st.popover("⋯", use_container_width=True):
                         can_reprocess = bool(source.get("file_path"))
+                        if st.button(
+                            "按大纲生成背诵内容",
+                            key=f"syllabus_reprocess_source_{source['id']}",
+                            disabled=not can_reprocess,
+                            use_container_width=True,
+                        ):
+                            try:
+                                _queue_syllabus_reprocess(user_id, source, max_points=60)
+                            except Exception as exc:
+                                st.error(f"大纲任务创建失败：{exc}")
+                            else:
+                                _queue_toast("已开始按整份大纲生成背诵内容")
+                                st.rerun()
                         if st.button(
                             "按新规则重新整理",
                             key=f"reprocess_source_{source['id']}",
@@ -5865,6 +6169,30 @@ def render_knowledge_page():
                                     _queue_toast("来源已不存在或无权删除")
                                 st.rerun()
                 st.caption(_source_status_label(source))
+                if (
+                    source.get("process_method") == "syllabus_memorization_ai"
+                    and int(source.get("knowledge_count") or 0) > 0
+                ):
+                    source_points = _load_material_points(
+                        user_id,
+                        selected_subject,
+                        source["id"],
+                    )
+                    if source_points:
+                        source_docx = _build_memorization_docx_cached(
+                            _memorization_docx_payload(source_points),
+                            selected_subject,
+                        )
+                        st.download_button(
+                            "下载这份大纲的背诵手册",
+                            data=source_docx,
+                            file_name=_safe_memorization_docx_filename(
+                                f"{selected_subject}-{Path(source.get('filename') or '考试大纲').stem}"
+                            ),
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"download_syllabus_docx_{source['id']}",
+                            use_container_width=True,
+                        )
                 if checked:
                     selected_source_ids.append(source["id"])
             if st.session_state.get("_workbench_upload_warnings"):

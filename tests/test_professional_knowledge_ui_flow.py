@@ -124,6 +124,13 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertTrue(self._markdown_contains(app, "408综合知识库"))
         self.assertTrue(any(item.label == "考试科目" for item in app.selectbox))
         self.assertFalse(any(item.label == "资料范围" for item in app.selectbox))
+        download_buttons = [
+            item
+            for item in app.get("download_button")
+            if item.label == "下载背诵版 DOCX"
+        ]
+        self.assertEqual(len(download_buttons), 1)
+        self.assertTrue(download_buttons[0].proto.url.endswith(".docx"))
         with sqlite3.connect(self.db_path) as conn:
             count = conn.execute(
                 "SELECT COUNT(*) FROM user_knowledge WHERE source_type='builtin_408'"
@@ -858,6 +865,130 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(status, "pending")
         self.assertEqual(remaining_knowledge, 0)
+
+    def test_page_exposes_dedicated_syllabus_reader(self):
+        app = self._run_app()
+
+        source_mode = _find_by_label(app.radio, "添加方式")
+        self.assertEqual(source_mode.value, "读取大纲")
+        self.assertTrue(any(item.label == "上传考试大纲" for item in app.get("file_uploader")))
+        self.assertTrue(any(item.label == "背诵条目数量" for item in app.slider))
+        self.assertTrue(
+            any(item.label == "读取大纲并生成背诵内容" for item in app.button)
+        )
+
+    def test_syllabus_upload_uses_dedicated_background_worker(self):
+        started_jobs = []
+        original_start = self.knowledge_base._start_syllabus_memorization_background
+
+        class FakeUpload:
+            name = "历史考试大纲.txt"
+
+            def getvalue(self):
+                return "中国古代史：商鞅变法；中国近现代史：洋务运动。".encode("utf-8")
+
+        self.knowledge_base._start_syllabus_memorization_background = started_jobs.append
+        try:
+            job = self.knowledge_base._queue_syllabus_upload(
+                1,
+                "历史学基础",
+                FakeUpload(),
+                max_points=80,
+            )
+        finally:
+            self.knowledge_base._start_syllabus_memorization_background = original_start
+            Path(job["file_path"]).unlink(missing_ok=True)
+
+        self.assertEqual(len(started_jobs), 1)
+        self.assertEqual(job["max_points"], 80)
+        self.assertTrue(job["chapter_name"].startswith("学校考纲 - "))
+
+    def test_syllabus_worker_saves_multiple_expanded_points(self):
+        from repositories.material_repo import create_material
+
+        source_path = self.temp_dir / "history-outline.txt"
+        source_path.write_text(
+            "中国古代史：商鞅变法；中国近现代史：洋务运动。",
+            encoding="utf-8",
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            material = create_material(
+                conn,
+                user_id=1,
+                subject="历史学基础",
+                filename=source_path.name,
+                chapter_name="学校考纲 - 历史",
+                file_path=str(source_path),
+                file_type="txt",
+            )
+            conn.commit()
+        task = self.task_service.create_task(
+            user_id=1,
+            subject="历史学基础",
+            chapter_name="学校考纲 - 历史",
+            filename=source_path.name,
+            material_id=material["id"],
+        )
+        job = {
+            "user_id": 1,
+            "material_id": material["id"],
+            "task_id": task.task_id,
+            "subject": "历史学基础",
+            "chapter_name": "学校考纲 - 历史",
+            "filename": source_path.name,
+            "file_path": str(source_path),
+            "file_type": "txt",
+            "max_points": 60,
+        }
+        fake_points = [
+            {
+                "knowledge_name": "商鞅变法",
+                "knowledge_type": "背诵知识点",
+                "subject": "历史学基础",
+                "chapter_name": "中国古代史",
+                "core_definition": "商鞅变法围绕政治、经济和军事制度展开，推动秦国建立较系统的中央集权制度并增强国力。",
+                "keywords": ["秦国", "变法"],
+                "is_ai_expansion": True,
+            },
+            {
+                "knowledge_name": "洋务运动",
+                "knowledge_type": "背诵知识点",
+                "subject": "历史学基础",
+                "chapter_name": "中国近现代史",
+                "core_definition": "洋务运动以自强、求富为目标兴办近代军事和民用企业，并推动近代教育、海军和技术传播。",
+                "keywords": ["自强", "求富"],
+                "is_ai_expansion": True,
+            },
+        ]
+        original_generate = self.knowledge_base.generate_syllabus_memorization_points
+        self.knowledge_base.generate_syllabus_memorization_points = (
+            lambda *args, **kwargs: (fake_points, [])
+        )
+        os.environ["AI_API_KEY"] = "test-key"
+        try:
+            self.knowledge_base._process_syllabus_memorization_job(job)
+        finally:
+            self.knowledge_base.generate_syllabus_memorization_points = original_generate
+
+        with sqlite3.connect(self.db_path) as conn:
+            source_state = conn.execute(
+                """SELECT processing_status, process_method, knowledge_count, error_message
+                   FROM user_materials WHERE id=?""",
+                (material["id"],),
+            ).fetchone()
+            self.assertEqual(source_state, ("done", "syllabus_memorization_ai", 2, ""))
+            rows = conn.execute(
+                """SELECT knowledge_name, chapter_name FROM user_knowledge
+                   WHERE material_id=? ORDER BY knowledge_name""",
+                (material["id"],),
+            ).fetchall()
+        self.assertEqual(
+            rows,
+            [("商鞅变法", "中国古代史"), ("洋务运动", "中国近现代史")],
+        )
+        saved_task = self.task_service.load_task(task.task_id)
+        self.assertEqual(saved_task.status, "done")
+        self.assertIn("共 2 个条目", saved_task.notes[-1])
 
 if __name__ == "__main__":
     unittest.main()

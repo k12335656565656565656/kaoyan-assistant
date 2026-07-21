@@ -25,6 +25,8 @@ import extra_streamlit_components as stx
 from dotenv import load_dotenv
 from docx import Document
 from docx.shared import Pt
+from services.llm_gateway import _apply_provider_options
+from services.adaptive_ocr_service import extract_text_adaptively
 from wrongbook_utils import (
     detect_subject,
     extract_final_message_content,
@@ -45,6 +47,94 @@ API_KEY = os.environ.get("AI_API_KEY", "").strip()
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip()
 MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5").strip() or "mimo-v2.5"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
+
+
+def _resolved_model_name(model_name=None):
+    return (model_name or MODEL_NAME or "mimo-v2.5").strip() or "mimo-v2.5"
+
+
+def _build_llm_payload(messages, *, model=None, max_tokens=1500, temperature=0.3, stream=False):
+    resolved_model = _resolved_model_name(model)
+    payload = {
+        "model": resolved_model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if stream:
+        payload["stream"] = True
+    _apply_provider_options(payload, resolved_model)
+    return payload
+
+
+def _request_llm_message(payload, *, timeout=90):
+    req = urllib.request.Request(
+        API_BASE + "/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {API_KEY}",
+            "User-Agent": "kaoyan-assistant/1.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
+
+
+def _brief_llm_error(error):
+    if isinstance(error, urllib.error.HTTPError):
+        if error.code == 401:
+            return "API Key 没通过校验，请检查本地 .env 里的 AI_API_KEY。"
+        if error.code == 403:
+            return "当前模型或接口拒绝了这次请求。常见原因是图片输入不被该模型支持，或模型名和 API 平台不匹配。"
+        if error.code == 429:
+            return "接口请求太频繁了，稍后再试。"
+        return f"接口返回 HTTP {error.code}。"
+    if isinstance(error, TimeoutError) or "timed out" in str(error).lower():
+        return "接口响应超时了，稍后可以重试。"
+    return str(error)[:120]
+
+
+def _extract_upload_text_locally(file_bytes):
+    if not file_bytes:
+        return {"text": "", "quality": 0.0, "engine": "none"}
+    try:
+        result = extract_text_adaptively(file_bytes, allow_paddle_fallback=True)
+        text = (result.text or "").strip()
+        quality = float(result.quality_score or 0.0)
+        engine = result.engine or "local"
+    except Exception:
+        text = ""
+        quality = 0.0
+        engine = "local"
+    if text:
+        return {"text": re.sub(r"\n{3,}", "\n\n", text), "quality": quality, "engine": engine}
+    try:
+        import requests
+        img_b64 = base64.b64encode(file_bytes).decode()
+        resp = requests.post(f"{UMI_OCR_URL}/api/ocr", json={"base64": img_b64}, timeout=20)
+        if resp.ok:
+            text = (resp.json().get("text") or "").strip()
+            return {"text": re.sub(r"\n{3,}", "\n\n", text), "quality": 0.75 if text else 0.0, "engine": "UMI-OCR"}
+    except Exception:
+        pass
+    return {"text": "", "quality": 0.0, "engine": "none"}
+
+
+def _is_generic_image_question(text):
+    normalized = re.sub(r"[\s，。！？?!.、:：；;]+", "", text or "")
+    return normalized in {"", "解答", "求解", "帮我解答", "帮我看看", "做题", "答案", "解析", "请解答"}
+
+
+def _looks_like_complete_math_question(text):
+    text = (text or "").strip()
+    if len(text) < 18:
+        return False
+    has_task = bool(re.search(r"(求|计算|证明|判断|解|为何|为什么|极限|导数|积分|概率|矩阵|方程|函数)", text))
+    has_math = bool(re.search(r"[$=+\-*/^_]|\\(?:frac|lim|int|sum|sin|cos|tan|ln|log)", text))
+    return has_task and has_math
 
 # 考纲分类：数学一独有 / 数学三独有
 MATH1_ONLY = {"020", "065", "067", "068", "069", "083", "084", "085", "086", "087", "101", "102", "103", "104", "105", "106", "109"}
@@ -2397,8 +2487,9 @@ def _append_debug_log(entry):
         st.session_state.debug_logs = st.session_state.debug_logs[-50:]
 
 
-def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3, image_base64=None):
+def call_llm_api(prompt, model=None, max_tokens=2000, temperature=0.3, image_base64=None):
     """调用 LLM API（非流式）+ 调试日志 + 自动重试。image_base64 为 data:image/...;base64,... 格式"""
+    model = _resolved_model_name(model)
     _init_debug_log()
     t0 = datetime.now()
     log_entry = {
@@ -2418,12 +2509,12 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3, im
         ]
     else:
         content = prompt
-    data = {
-        "model": model,
-        "messages": [{"role": "user", "content": content}],
-        "max_tokens": max_tokens,
-        "temperature": temperature
-    }
+    data = _build_llm_payload(
+        [{"role": "user", "content": content}],
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
     last_error = None
     max_retries = 5
     for attempt in range(max_retries):
@@ -2463,6 +2554,12 @@ def call_llm_api(prompt, model="mimo-v2.5", max_tokens=2000, temperature=0.3, im
                 log_entry["status"] = "ok"
                 _append_debug_log(log_entry)
                 return cleaned
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code not in {408, 409, 429, 500, 502, 503, 504, 529}:
+                break
+            if attempt < max_retries - 1:
+                continue
         except (urllib.error.URLError, ConnectionResetError, TimeoutError, OSError) as e:
             last_error = e
             if attempt < max_retries - 1:
@@ -3646,16 +3743,11 @@ def run_pipeline(query, results, model_name, img_data=None):
     model = model_name
     max_tok = 2400 if img_data else 1800
     temp = 0.3
-    data = {
-        "model": model,
-        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}],
-        "max_tokens": max_tok,
-        "temperature": temp,
-        "stream": True,
-    }
+    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
+    data = _build_llm_payload(messages, model=model, max_tokens=max_tok, temperature=temp, stream=True)
     # 先尝试流式
     try:
-        req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
+        req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data, ensure_ascii=False).encode('utf-8'), headers={'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}', 'User-Agent': 'kaoyan-assistant/1.0'}, method='POST')
         raw_full = ""
         with urllib.request.urlopen(req, timeout=180) as resp:
             buffer = ""
@@ -3691,7 +3783,7 @@ def run_pipeline(query, results, model_name, img_data=None):
         # 流式失败，降级为非流式
         try:
             data["stream"] = False
-            req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}'}, method='POST')
+            req = urllib.request.Request(API_BASE + "/chat/completions", data=json.dumps(data, ensure_ascii=False).encode('utf-8'), headers={'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': f'Bearer {API_KEY}', 'User-Agent': 'kaoyan-assistant/1.0'}, method='POST')
             with urllib.request.urlopen(req, timeout=180) as resp:
                 msg = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']
                 raw_full = extract_final_message_content(msg)
@@ -3703,7 +3795,7 @@ def run_pipeline(query, results, model_name, img_data=None):
             result["pipeline_log"] = pipeline_log
             yield {"type": "done", "result": result}
         except Exception as e:
-            yield {"type": "done", "result": {"answer": f"[系统提示] API调用失败: {str(e)[:100]}", "knowledge": [], "quiz": "", "qtype": "math", "pipeline_log": pipeline_log}}
+            yield {"type": "done", "result": {"answer": f"[系统提示] {_brief_llm_error(e)}", "knowledge": [], "quiz": "", "qtype": "math", "pipeline_log": pipeline_log}}
 
 # ==================== LLM调用 ====================
 
@@ -4586,105 +4678,72 @@ if st.session_state.page == "main":
                     import base64 as _b64
                     img_bytes = _upload.read()
                     img_b64 = _b64.b64encode(img_bytes).decode()
-                    ocr_prompt = """识别这张考研题目图片中的题干与公式。禁止输出思维链、分析、解题过程或说明。
+                    local_ocr = _extract_upload_text_locally(img_bytes)
+                    local_ocr_text = local_ocr["text"]
+                    if local_ocr_text:
+                        if (
+                            local_ocr["quality"] < 0.55
+                            and not _looks_like_complete_math_question(local_ocr_text)
+                        ):
+                            st.warning(
+                                f"这张图只识别到一部分内容（{local_ocr['engine']}，质量 {local_ocr['quality']:.2f}）。"
+                                "为了避免乱答，请补充完整题干，或换一张更清晰的截图。"
+                            )
+                            with st.expander("查看当前识别到的文字"):
+                                st.text(local_ocr_text)
+                            st.stop()
+                        user_input = local_ocr_text
+                    else:
+                        ocr_prompt = """识别这张考研题目图片中的题干与公式。禁止输出思维链、分析、解题过程或说明。
 只能按以下格式输出，标签外不得有任何内容：
 <question>题目原文，公式用 LaTeX</question>"""
-                    ocr_data = {
-                        "model": "mimo-v2.5",
-                        "messages": [{"role": "user", "content": [
-                            {"type": "text", "text": ocr_prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                        ]}],
-                        "max_tokens": 500, "temperature": 0.1
-                    }
-                    try:
-                        ocr_req = urllib.request.Request(
-                            API_BASE + "/chat/completions",
-                            data=json.dumps(ocr_data).encode("utf-8"),
-                            headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                            method="POST")
-                        with urllib.request.urlopen(ocr_req, timeout=60) as ocr_resp:
-                            ocr_msg = json.loads(ocr_resp.read().decode("utf-8"))["choices"][0]["message"]
-                        user_input = parse_wrongbook_ai_question(extract_final_message_content(ocr_msg))
+                        ocr_data = _build_llm_payload(
+                            [{"role": "user", "content": [
+                                {"type": "text", "text": ocr_prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                            ]}],
+                            max_tokens=500,
+                            temperature=0.1,
+                        )
+                        try:
+                            ocr_msg = _request_llm_message(ocr_data, timeout=60)
+                            user_input = parse_wrongbook_ai_question(extract_final_message_content(ocr_msg))
+                        except Exception as e:
+                            st.info(f"图片接口暂时不可用，已改用文字输入方式。原因：{_brief_llm_error(e)}")
+                            user_input = ""
                         # 图片 OCR 提取失败时，不放弃——继续把图片送入回答管线，从 AI 回答中提取题目
                         if not user_input:
-                            st.warning("直接识别题目失败，将尝试通过 AI 回答提取题目...")
+                            st.warning("没有识别到完整题目。可以在输入框补充题干，或者换一张更清晰的截图。")
                             user_input = "[图片题目]"  # 占位，让后续管线继续运行
                             st.session_state["_qa_ocr_fallback"] = True
                             st.session_state["_qa_img_b64"] = img_b64
                         with st.expander("📷 识别结果"):
                             st.caption(user_input if user_input != "[图片题目]" else "未识别到完整题目，将通过 AI 回答提取")
-                    except Exception as e:
-                        st.error(f"图片识别失败: {e}")
-                        user_input = ""
             elif _upload and user_input:
                 with st.spinner("正在分析..."):
                     import base64 as _b64
                     img_bytes = _upload.read()
                     img_b64 = _b64.b64encode(img_bytes).decode()
-                    user_input += "\n[附题目截图]"
-                    corpus = load_corpus()
-                    docs = search_corpus(user_input, corpus, top_k=3)
-                    style = st.session_state.get("qa_style", "默认")
-                    style_hint = "" if style == "默认" else f"请用{style}的方式回答。"
-                    prompt = f"""{style_hint}你是考研数学辅导专家。用户上传了一道题目截图，请根据以下参考资料解答。
-
-用户问题: {user_input}
-
-参考资料:
-"""
-                    for i, doc in enumerate(docs):
-                        prompt += f"\n[{i+1}] {doc['id']}: {doc['text'][:800]}\n"
-                    prompt += """
-
-禁止输出思维链、内部分析或解题前言。只输出面向学生的最终答案与简洁解析。
-严格按以下格式输出，标签外不得有任何内容：
-[ANSWER]
-（最终答案与简洁解析，公式使用 LaTeX）
-[KNOWLEDGE]
-（知识点，逗号分隔）"""
-                    mm_data = {
-                        "model": "mimo-v2.5",
-                        "messages": [{"role": "user", "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                        ]}],
-                        "max_tokens": 2000, "temperature": 0.3
-                    }
-                    mm_req = urllib.request.Request(
-                        API_BASE + "/chat/completions",
-                        data=json.dumps(mm_data).encode("utf-8"),
-                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                        method="POST")
-                    with urllib.request.urlopen(mm_req, timeout=120) as mm_resp:
-                        mm_msg = json.loads(mm_resp.read().decode("utf-8"))["choices"][0]["message"]
-                    parsed_answer = parse_smart_answer_output(extract_final_message_content(mm_msg))
-                    answer = _fix_latex(parsed_answer["answer"])
-                    answer_desc = parsed_answer.get("description", "")
-                if not answer:
-                    st.error("模型未返回符合格式的最终答案，请重试。")
-                    st.session_state._last_answer_text = ""
-                    st.stop()
-                if answer_desc.strip():
-                    st.markdown(f'<div style="color:#4f46e5;font-size:0.9em;margin-bottom:8px;">📝 {_escape_md(answer_desc.strip())}</div>', unsafe_allow_html=True)
-                st.markdown("### 回答")
-                processed_answer = _escape_md(_collapse_math(answer))
-                st.markdown(f'<div class="qa-card">{processed_answer}</div>', unsafe_allow_html=True)
-                _katex_refresh()
-                st.session_state._last_answer_text = answer
-                st.session_state._last_results = docs
-                st.session_state._last_query = user_input.replace("\n[附题目截图]", "")
-                if docs:
-                    ref_html = "".join(f'<span class="ref-tag">{d["id"]}</span>' for d in docs)
-                    st.markdown(f'<div style="margin-top:8px;">{ref_html}</div>', unsafe_allow_html=True)
-                    _record_qa_knowledge(docs)
-                # 知识点归纳
-                _matched = smart_match_knowledge(st.session_state._last_query)
-                if _matched:
-                    st.session_state._matched_knowledge = _matched
-                    for kid in _matched:
-                        update_memory(kid, False, error_type="自动归纳")
-                st.rerun()
+                    local_ocr = _extract_upload_text_locally(img_bytes)
+                    local_ocr_text = local_ocr["text"]
+                    if local_ocr_text:
+                        if (
+                            _is_generic_image_question(user_input)
+                            and local_ocr["quality"] < 0.55
+                            and not _looks_like_complete_math_question(local_ocr_text)
+                        ):
+                            st.warning(
+                                f"这张图只识别到一部分内容（{local_ocr['engine']}，质量 {local_ocr['quality']:.2f}）。"
+                                "为了避免乱答，请补充完整题干，或换一张更清晰的截图。"
+                            )
+                            with st.expander("查看当前识别到的文字"):
+                                st.text(local_ocr_text)
+                            st.stop()
+                        user_input = f"{user_input}\n\n[题目截图识别文字]\n{local_ocr_text}"
+                    else:
+                        user_input += "\n[附题目截图]"
+                        st.session_state["_qa_ocr_fallback"] = True
+                        st.session_state["_qa_img_b64"] = img_b64
 
             # OCR 降级：图片识别失败时，用图片直接送入回答管线，从 AI 回答中提取题目
             _ocr_fallback = st.session_state.pop("_qa_ocr_fallback", False)
@@ -4704,7 +4763,7 @@ if st.session_state.page == "main":
             thinking_placeholder.markdown("AI 正在思考...")
 
             output = None
-            for event in run_pipeline(user_input, docs, "mimo-v2.5", img_data=_ocr_img_b64):
+            for event in run_pipeline(user_input, docs, MODEL_NAME, img_data=_ocr_img_b64):
                 if event["type"] == "done":
                     output = event["result"]
 
@@ -4720,7 +4779,7 @@ if st.session_state.page == "main":
                 if description_text.strip():
                     st.markdown(f'<div style="color:#4f46e5;font-size:0.9em;margin-bottom:8px;">📝 {_escape_md(description_text.strip())}</div>', unsafe_allow_html=True)
                 answer_placeholder = st.empty()
-                _typing_display(answer_placeholder, _escape_md(_collapse_math(_fix_latex(answer_text.strip()))), delay=0.02)
+                _typing_display(answer_placeholder, _escape_md(_collapse_math(_prepare_math_for_display(answer_text.strip()))), delay=0.02)
                 _katex_refresh()
                 st.session_state._last_answer_text = answer_text.strip()
             else:
@@ -4767,7 +4826,7 @@ if st.session_state.page == "main":
         # --- 问答后交互按钮（_ask 块外，rerun 后仍可渲染）---
         if not (_ask and (_q.strip() or _upload)) and st.session_state.get("_last_answer_text"):
             st.markdown("### 回答")
-            answer_text = _escape_md(_collapse_math(_fix_latex(st.session_state._last_answer_text)))
+            answer_text = _escape_md(_collapse_math(_prepare_math_for_display(st.session_state._last_answer_text)))
             st.markdown(f'<div class="qa-card">{answer_text}</div>', unsafe_allow_html=True)
             _katex_refresh()
             last_results = st.session_state.get("_last_results", [])
@@ -7239,8 +7298,8 @@ with left_col:
     st.markdown("---")
 
     # 模型
-    st.session_state.selected_model = "mimo-v2.5"
-    st.caption("模型: mimo-v2.5")
+    st.session_state.selected_model = MODEL_NAME
+    st.caption(f"模型: {MODEL_NAME}")
 
     st.markdown("---")
 
@@ -7331,14 +7390,14 @@ with mid_col:
             st.session_state._last_question_description = ""
         st.markdown('</div>', unsafe_allow_html=True)
         # 诊断：GLM 原始输出
-        if output.get("_raw_debug"):
+        if output and output.get("_raw_debug"):
             with st.expander("🔧 GLM原始输出（诊断）"):
                 st.code(output["_raw_debug"])
         add_thinking(f"回答完成")
         log_visit("提问", f"{query[:50]}")
 
         # 知识点归纳（用 ALIAS 表归一化为实际文件名）
-        if output.get("knowledge"):
+        if output and output.get("knowledge"):
             validated = []
             for kid in output["knowledge"]:
                 match = smart_match_knowledge(kid.strip())
