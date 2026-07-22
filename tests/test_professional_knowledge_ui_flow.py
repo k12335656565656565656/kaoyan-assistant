@@ -89,6 +89,61 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             )
             conn.commit()
 
+    def _enable_fake_professional_ai(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        calls = {"question": 0, "grade": 0}
+
+        def fake_llm(prompt, **kwargs):
+            if "学生回答" in prompt or "阅卷" in prompt:
+                calls["grade"] += 1
+                return (
+                    '{"score":82,"feedback":"要点基本正确，继续补充边界条件。",'
+                    '"rating":"good","missed_points":["边界条件"],'
+                    '"mistake_reason":"过程说明还可以更完整。",'
+                    '"next_review":"复习对应知识点的适用条件。",'
+                    '"similar_question":"换一组条件再做一题。"}'
+                )
+            calls["question"] += 1
+            suffix = calls["question"]
+            if "单选题" in prompt or "choice" in prompt:
+                return (
+                    '{"question_type":"choice",'
+                    f'"question":"某 AOV 网边集为 A->C、B->C、C->D，第 {suffix} 次生成。下列说法哪一项正确？",'
+                    '"options":["A. C 可以排在 A 前面","B. A 和 B 都必须排在 C 前面","C. D 必须排在 C 前面","D. 图中一定存在环"],'
+                    '"correct_answer":"B","reference_answer":"A、B 均为 C 的前驱，C 又先于 D。",'
+                    '"grading_points":["入度约束","拓扑序列","有向无环图"],'
+                    '"similar_question":"换一组先修关系再判断。"}'
+                )
+            if "填空题" in prompt or "blank" in prompt:
+                return (
+                    '{"question_type":"blank",'
+                    f'"question":"填空：对 AOV 网做拓扑排序时，第 {suffix} 次生成，应优先选择入度为 ______ 的顶点。",'
+                    '"options":[],"correct_answer":"0",'
+                    '"reference_answer":"填 0。入度为 0 表示所有前驱活动已经完成。",'
+                    '"grading_points":["入度为0","前驱活动完成"],'
+                    '"similar_question":"换一张图写出第一轮可选顶点。"}'
+                )
+            if "概念辨析题" in prompt or "concept" in prompt:
+                return (
+                    '{"question_type":"concept",'
+                    f'"question":"请用自己的话解释 AOV 网与拓扑排序的关系，并说明第 {suffix} 次生成时如何判断有向环。",'
+                    '"options":[],"correct_answer":"",'
+                    '"reference_answer":"AOV 网用顶点表示活动、边表示先后关系；拓扑排序通过反复选择入度为 0 的顶点判断是否存在环。",'
+                    '"grading_points":["活动顶点","先后关系","入度为0","有向环"],'
+                    '"similar_question":"解释 AOE 网和 AOV 网的区别。"}'
+                )
+            return (
+                '{"question_type":"application",'
+                f'"question":"已知活动依赖 A->C、B->C、C->D，第 {suffix} 次生成。请给出一种拓扑序列并说明判断依据。",'
+                '"options":[],"correct_answer":"",'
+                '"reference_answer":"A、B 必须在 C 前，C 必须在 D 前，因此 A,B,C,D 或 B,A,C,D 均可。",'
+                '"grading_points":["前驱关系","拓扑序列","有向无环图"],'
+                '"similar_question":"把边改为 A->B、C->B，再给出拓扑序列。"}'
+            )
+
+        self.knowledge_base._call_llm_api = fake_llm
+        return calls
+
     @staticmethod
     def _markdown_contains(app, text):
         return any(text in str(element.value) for element in app.markdown)
@@ -227,6 +282,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertTrue(self._markdown_contains(app, "真题风格例题"))
 
     def test_quiz_panel_appears_under_selected_knowledge(self):
+        self._enable_fake_professional_ai()
         app = self._run_app()
 
         _find_by_label(app.button, "出题", occurrence=0).click().run()
@@ -234,7 +290,8 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             raise AssertionError(app.exception)
 
         self.assertTrue(self._markdown_contains(app, "AOV 网与活动排序 · 综合应用题"))
-        self.assertTrue(self._info_contains(app, "拓扑序列"))
+        self.assertEqual(len(app.info), 1)
+        self.assertEqual(len(app.error), 0)
         self.assertFalse(self._markdown_contains(app, ">题目<"))
         self.assertTrue(any(item.label == "换一道题" for item in app.button))
         _find_by_label(app.button, "保存本题").click().run()
@@ -248,6 +305,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertEqual(workspace_nav.value, "知识库")
 
     def test_regenerate_and_save_stays_in_knowledge_view_and_keeps_multiple_questions(self):
+        self._enable_fake_professional_ai()
         app = self._run_app()
 
         _find_by_label(app.button, "出题", occurrence=0).click().run()
@@ -270,6 +328,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertEqual(saved_count, 2)
 
     def test_choice_question_has_options_and_can_be_saved(self):
+        self._enable_fake_professional_ai()
         app = self._run_app()
 
         _find_by_label(app.button, "选择题", occurrence=0).click().run()
@@ -328,6 +387,45 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         )
 
         self.assertGreaterEqual(result["score"], 0)
+
+    def test_ai_grading_prompt_requires_score_breakdown_and_standard_answer(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        captured = {}
+
+        def fake_llm(prompt, **kwargs):
+            captured["prompt"] = prompt
+            captured["max_tokens"] = kwargs.get("max_tokens")
+            return (
+                '{"score":76,"rating":"good","feedback":"过程基本对，但缺少复杂度分析。",'
+                '"standard_answer":"应先写地址字段划分，再说明查找流程。",'
+                '"score_breakdown":[{"point":"字段划分","score":30,"max_score":40,"comment":"写出了组号和块内地址，但标记位说明不完整。"}],'
+                '"missed_points":["标记位位数","复杂度/代价分析"],'
+                '"mistake_reason":"只写结论，没有把地址位数和组数对应起来。",'
+                '"corrected_answer":"地址分为标记、组号、块内地址三部分，并按组号定位。",'
+                '"next_review":"复习 Cache 组相联映射的地址字段划分。",'
+                '"similar_question":"给定 Cache 参数，重新划分主存地址字段。"}'
+            )
+
+        self.knowledge_base._call_llm_api = fake_llm
+
+        result = self.knowledge_base._grade_professional_answer(
+            {"knowledge_name": "Cache 映射", "core_definition": "组相联 Cache 通过组号定位集合。"},
+            "某机采用组相联 Cache，请说明地址字段划分。",
+            "地址里有组号和偏移。",
+            "需要说明标记、组号和块内地址。",
+            ["标记", "组号", "块内地址"],
+            "application",
+            use_ai=True,
+        )
+
+        self.assertIn("得分点", captured["prompt"])
+        self.assertIn("标准答案", captured["prompt"])
+        self.assertIn("学生回答", captured["prompt"])
+        self.assertGreaterEqual(captured["max_tokens"], 1200)
+        self.assertEqual(result["score"], 76)
+        self.assertEqual(result["standard_answer"], "应先写地址字段划分，再说明查找流程。")
+        self.assertEqual(result["corrected_answer"], "地址分为标记、组号、块内地址三部分，并按组号定位。")
+        self.assertEqual(result["score_breakdown"][0]["point"], "字段划分")
 
     def test_llm_api_uses_configured_default_model(self):
         captured = {}
@@ -396,6 +494,41 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertEqual(generated["correct_answer"], "B")
         self.assertEqual(len(generated["options"]), 4)
 
+    def test_configured_ai_question_failure_does_not_use_local_template(self):
+        os.environ["AI_API_KEY"] = "test-key"
+
+        def broken_llm(prompt, **kwargs):
+            raise TimeoutError("simulated timeout")
+
+        self.knowledge_base._call_llm_api = broken_llm
+        point = {
+            "knowledge_name": "哈夫曼树与哈夫曼编码",
+            "core_definition": "哈夫曼树用贪心思想构造最小 WPL 的二叉树。",
+            "keywords_json": '["哈夫曼树","WPL","前缀编码"]',
+        }
+
+        generated = self.knowledge_base._generate_professional_question(point, "choice", variant=2)
+
+        self.assertTrue(generated.get("generation_failed"))
+        self.assertIn("AI 出题暂时不可用", generated["question"])
+        self.assertNotIn("围绕“哈夫曼树与哈夫曼编码”做题时", generated["question"])
+        self.assertNotIn("若题干改变约束条件", generated["question"])
+
+    def test_configured_ai_incomplete_question_does_not_use_local_template(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        self.knowledge_base._call_llm_api = lambda *args, **kwargs: '{"question":"题目","reference_answer":""}'
+        point = {
+            "knowledge_name": "哈夫曼树与哈夫曼编码",
+            "core_definition": "哈夫曼编码是前缀编码。",
+            "keywords_json": '["哈夫曼树","WPL","前缀编码"]',
+        }
+
+        generated = self.knowledge_base._generate_professional_question(point, "blank", variant=3)
+
+        self.assertTrue(generated.get("generation_failed"))
+        self.assertIn("AI 返回的题干或参考答案不完整", generated.get("generation_warning", ""))
+        self.assertNotIn("填空：做“哈夫曼树与哈夫曼编码”相关题时", generated["question"])
+
     def test_clean_assistant_answer_removes_meta_text_and_source_markers(self):
         raw = (
             "现在开始写。\n"
@@ -414,6 +547,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertIn("线性表", cleaned)
 
     def test_concept_self_test_has_real_question_and_no_blocking_spinner(self):
+        self._enable_fake_professional_ai()
         app = self._run_app()
 
         _find_by_label(app.button, "概念自测", occurrence=0).click().run()
@@ -421,11 +555,13 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             raise AssertionError(app.exception)
 
         self.assertTrue(self._markdown_contains(app, "AOV 网与活动排序 · 概念自测"))
-        self.assertTrue(self._info_contains(app, "请用自己的话解释"))
+        self.assertEqual(len(app.info), 1)
+        self.assertEqual(len(app.error), 0)
         self.assertFalse(self._markdown_contains(app, "正在准备概念自测"))
         self.assertFalse(self._markdown_contains(app, "正在按这条知识点出题"))
 
     def test_blank_question_mode_is_available(self):
+        self._enable_fake_professional_ai()
         app = self._run_app()
 
         _find_by_label(app.button, "填空题", occurrence=0).click().run()
@@ -433,9 +569,11 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             raise AssertionError(app.exception)
 
         self.assertTrue(self._markdown_contains(app, "填空题"))
-        self.assertTrue(self._info_contains(app, "填空"))
+        self.assertEqual(len(app.info), 1)
+        self.assertEqual(len(app.error), 0)
 
     def test_question_variant_changes_between_starts(self):
+        self._enable_fake_professional_ai()
         point = {
             "id": 999,
             "knowledge_name": "AOV 网与活动排序",
@@ -662,6 +800,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             self.knowledge_base._call_llm_api = original_llm
 
     def test_knowledge_card_quiz_records_feedback_and_memory(self):
+        self._enable_fake_professional_ai()
         self._seed_knowledge("408综合", "页式虚拟存储器")
         app = self._run_app()
 

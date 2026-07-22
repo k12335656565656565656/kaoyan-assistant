@@ -4857,24 +4857,47 @@ def _is_placeholder_question(question):
     return normalized in {"", "题目", "问题", "练习题", "概念自测", "请作答"}
 
 
+def _question_generation_error(point, mode, warning):
+    name = point.get("knowledge_name") or "当前知识点"
+    message = str(warning or "").strip() or "AI 出题没有返回可用题目。"
+    return {
+        "question_type": mode or "application",
+        "question": f"AI 出题暂时不可用：{message} 当前知识点：{name}。",
+        "options": [],
+        "correct_answer": "",
+        "reference_answer": "",
+        "grading_points": [],
+        "similar_question": "",
+        "generation_failed": True,
+        "generation_warning": message,
+    }
+
+
 def _generate_professional_question(point, mode="quiz", variant=0):
     fallback = _fallback_professional_question(point, mode, variant=variant)
-    if os.environ.get("AI_API_KEY", "").strip():
-        generated, _warning = _generate_professional_question_with_ai(
-            point,
-            mode,
-            variant=variant,
-        )
-        question = str(generated.get("question") or "").strip()
-        if not _is_placeholder_question(question) and question != fallback.get("question"):
-            return generated
-    return fallback
+    if not os.environ.get("AI_API_KEY", "").strip():
+        return _question_generation_error(point, mode, "未配置 AI_API_KEY，无法生成专业课练习题。")
+    generated, warning = _generate_professional_question_with_ai(
+        point,
+        mode,
+        variant=variant,
+        allow_fallback=False,
+    )
+    question = str(generated.get("question") or "").strip()
+    if warning:
+        generated["generation_warning"] = warning
+    if not _is_placeholder_question(question) and question != fallback.get("question"):
+        return generated
+    return _question_generation_error(point, mode, warning or "AI 返回的题干为空或不完整。")
 
 
-def _generate_professional_question_with_ai(point, mode="quiz", variant=1):
+def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, allow_fallback=True):
     fallback = _fallback_professional_question(point, mode, variant=variant)
     if not os.environ.get("AI_API_KEY", "").strip():
-        return fallback, ""
+        warning = "未配置 AI_API_KEY，无法生成专业课练习题。"
+        if allow_fallback:
+            return _question_generation_error(point, mode, warning), warning
+        return _question_generation_error(point, mode, warning), warning
     mode_guidance = {
         "choice": "生成一道408统考风格单选题，必须有 A/B/C/D 四个选项、唯一正确答案和解析。",
         "blank": "生成一道填空题，空格必须挖在关键条件、算法步骤、字段含义或易混点上，不能只挖名词。",
@@ -4903,7 +4926,11 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1):
     try:
         payload = _parse_llm_json(_call_llm_api(prompt, max_tokens=2200, temperature=0.85))
     except Exception as exc:
-        return fallback, _format_llm_error(exc)
+        warning = _format_llm_error(exc)
+        if allow_fallback:
+            fallback["generation_warning"] = warning
+            return fallback, warning
+        return _question_generation_error(point, mode, warning), warning
     question = str(_payload_first(payload, "question", "题干", "题目", "练习题")).strip()
     reference_answer = str(_payload_first(payload, "reference_answer", "answer", "参考答案", "答案")).strip()
     grading_points = _payload_first(payload, "grading_points", "points", "评分点", "要点") or []
@@ -4911,7 +4938,11 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1):
     correct_answer = str(_payload_first(payload, "correct_answer", "正确答案", "答案选项")).strip()
     similar_question = str(_payload_first(payload, "similar_question", "相似题", "同类题")).strip()
     if _is_placeholder_question(question) or len(question) < 18 or not reference_answer:
-        return fallback, ""
+        warning = "AI 返回的题干或参考答案不完整。"
+        if allow_fallback:
+            fallback["generation_warning"] = warning
+            return fallback, warning
+        return _question_generation_error(point, mode, warning), warning
     if isinstance(grading_points, str):
         grading_points = [
             item.strip()
@@ -4985,25 +5016,56 @@ def _grade_professional_answer(point, question, answer, reference_answer, gradin
     fallback = _fallback_professional_grade(point, answer)
     if not use_ai or not os.environ.get("AI_API_KEY", "").strip():
         return fallback
-    prompt = f"""你是考研专业课阅卷老师。依据用户自己的资料评分，不要展示思考过程。
+    prompt = f"""你是考研专业课阅卷老师，按“408/院校专业课主观题”标准批改。不要展示思考过程，不要安慰，不要泛泛鼓励，只给考生能改答案的内容。
 
-评分要求：
-- 总分 0 到 100。
-- 看概念是否准确、要点是否完整、表达是否清楚。
-- 如果是选择题，先看选项是否正确，再看理由。
-- 资料没有支持的说法不要替学生补成正确答案。
-- 反馈要指出：漏了哪个得分点、为什么错、下次复习哪个知识点、再给一道相似题。
-- 只输出 JSON：{{"score":80,"feedback":"反馈","rating":"again|hard|good|easy","missed_points":["漏分点"],"mistake_reason":"错因","next_review":"下次复习建议","similar_question":"相似题"}}
+批改规则：
+1. 先判断学生是否真正回答了题目任务；跑题、只背定义、没写过程都要扣分。
+2. 如果是选择题，先判选项，再看理由；选项错但理由有局部价值，最多给 45 分。
+3. 如果是填空题，先判空是否正确，再看解释；空错通常不超过 50 分。
+4. 如果是算法题/综合题，必须看条件提取、关键步骤、计算/推演过程、结论四部分。
+5. 严格依据“题目、参考答案、评分点、当前知识点”评分；资料没有支持的说法不要替学生脑补。
+6. 反馈要具体到“哪句话缺了、哪一步错了、应该怎么改”，不要写“继续努力”“整体不错”这类空话。
+7. 标准答案要适合考生直接对照订正，简洁但完整。
+8. 只输出 JSON，不要 Markdown，不要代码块。
+
+JSON 字段固定为：
+{{
+  "score": 0,
+  "rating": "again|hard|good|easy",
+  "feedback": "一句话总评，直接指出主要问题",
+  "standard_answer": "完整标准答案/参考作答",
+  "score_breakdown": [
+    {{"point":"得分点1","score":0,"max_score":0,"comment":"为什么得/扣分"}},
+    {{"point":"得分点2","score":0,"max_score":0,"comment":"为什么得/扣分"}}
+  ],
+  "missed_points": ["漏掉的得分点"],
+  "mistake_reason": "错因，说明为什么会错",
+  "corrected_answer": "把学生答案改成可拿高分的版本",
+  "next_review": "下次应该复习的具体知识点",
+  "similar_question": "同知识点、换条件的相似题"
+}}
 
 作答类型：{mode}
-题目：{question}
-正确选项：{correct_answer}
-参考答案：{reference_answer}
-评分点：{'、'.join(grading_points or [])}
-学生回答：{answer}
+题目：
+{question}
+
+正确选项：
+{correct_answer}
+
+参考答案：
+{reference_answer}
+
+评分点：
+{'、'.join(grading_points or [])}
+
+当前知识点：
+{_point_context(point, include_source=False)}
+
+学生回答：
+{answer}
 """
     try:
-        payload = _parse_llm_json(_call_llm_api(prompt, max_tokens=700))
+        payload = _parse_llm_json(_call_llm_api(prompt, max_tokens=1600, temperature=0.15))
         score = max(0, min(100, int(payload.get("score"))))
     except (Exception, TypeError, ValueError):
         return fallback
@@ -5016,6 +5078,9 @@ def _grade_professional_answer(point, question, answer, reference_answer, gradin
         missed_points = [item.strip() for item in re.split(r"[\n,，、;；]+", missed_points) if item.strip()]
     if not isinstance(missed_points, list):
         missed_points = []
+    score_breakdown = payload.get("score_breakdown") or payload.get("得分明细") or []
+    if not isinstance(score_breakdown, list):
+        score_breakdown = []
     return {
         "score": score,
         "feedback": feedback,
@@ -5024,6 +5089,12 @@ def _grade_professional_answer(point, question, answer, reference_answer, gradin
         "mistake_reason": str(payload.get("mistake_reason") or payload.get("错因") or fallback.get("mistake_reason") or "").strip(),
         "next_review": str(payload.get("next_review") or payload.get("下次复习") or fallback.get("next_review") or "").strip(),
         "similar_question": str(payload.get("similar_question") or payload.get("相似题") or fallback.get("similar_question") or "").strip(),
+        "standard_answer": str(payload.get("standard_answer") or payload.get("标准答案") or reference_answer or "").strip(),
+        "corrected_answer": str(payload.get("corrected_answer") or payload.get("订正答案") or "").strip(),
+        "score_breakdown": [
+            item for item in score_breakdown
+            if isinstance(item, dict) and str(item.get("point") or item.get("得分点") or "").strip()
+        ][:8],
     }
 
 
@@ -5060,11 +5131,27 @@ def _question_with_options(question, options):
 
 
 def _render_grade_details(result):
+    breakdown = result.get("score_breakdown") or []
+    if breakdown:
+        st.markdown("**得分点拆解**")
+        for item in breakdown:
+            point = item.get("point") or item.get("得分点") or "得分点"
+            score = item.get("score", item.get("得分", ""))
+            max_score = item.get("max_score", item.get("满分", ""))
+            comment = item.get("comment") or item.get("说明") or ""
+            score_text = f"{score}/{max_score}" if str(max_score) else str(score)
+            st.markdown(f"- **{point}**：{score_text}。{comment}")
     missed = result.get("missed_points") or []
     if missed:
         st.markdown(f"**漏掉的得分点**：{'、'.join(str(item) for item in missed)}")
     if result.get("mistake_reason"):
         st.markdown(f"**错因**：{result.get('mistake_reason')}")
+    if result.get("standard_answer"):
+        with st.expander("标准答案", expanded=False):
+            st.markdown(result.get("standard_answer"))
+    if result.get("corrected_answer"):
+        with st.expander("你的答案可以这样改", expanded=False):
+            st.markdown(result.get("corrected_answer"))
     if result.get("next_review"):
         st.markdown(f"**下次复习**：{result.get('next_review')}")
     if result.get("similar_question"):
@@ -5100,17 +5187,22 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
     mode_label = _question_mode_label(active.get("mode"))
     title = point.get("knowledge_name") or "当前知识点"
     question_text = active.get("question") or ""
-    if _is_placeholder_question(question_text):
-        repaired = _fallback_professional_question(point, active.get("mode") or "quiz")
+    generation_failed = bool(active.get("generation_failed"))
+    if _is_placeholder_question(question_text) and not generation_failed:
+        repaired = _question_generation_error(point, active.get("mode") or "quiz", "题干为空，请重新生成。")
         active.update(repaired)
         st.session_state[state_key] = active
         question_text = active.get("question") or ""
+        generation_failed = True
     st.markdown(
         f"""<div class="pk-study-panel"><strong>{_escape_html(title)} · {mode_label}</strong></div>""",
         unsafe_allow_html=True,
     )
     st.markdown("**题目**")
-    st.info(question_text or "题目生成失败，请重新点击出题。")
+    if generation_failed:
+        st.error(question_text or "AI 出题暂时不可用，请检查 API 配置后重试。")
+    else:
+        st.info(question_text or "题目生成失败，请重新点击出题。")
     options = [str(item).strip() for item in active.get("options") or [] if str(item).strip()]
     if options:
         st.markdown("**选项**")
@@ -5124,14 +5216,20 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
                 point,
                 active.get("mode") or "quiz",
                 variant=variant,
+                allow_fallback=False,
             )
             active.update(generated)
+            if warning:
+                active["generation_warning"] = warning
             active["variant"] = variant
             active.pop("result", None)
             st.session_state[state_key] = active
             st.rerun()
     with tool_col2:
         if st.button("保存本题", key=f"pk_study_save_question_{scope}_{point.get('id')}_{active.get('mode')}", use_container_width=True):
+            if active.get("generation_failed"):
+                st.warning("当前没有可保存的有效题目。请先让 AI 成功生成一道题。")
+                return
             if not str(question_text or "").strip():
                 st.warning("当前题干为空，先换一道题再保存。")
                 return
@@ -5204,6 +5302,10 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
             st.rerun()
         return
 
+    if generation_failed:
+        st.caption("当前没有可作答的题目。请检查 API 配置后点“换一道题”重新生成。")
+        return
+
     answer = st.text_area(
         "你的回答",
         placeholder="先自己写，再提交。不会也可以把目前想到的写下来。",
@@ -5235,7 +5337,7 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
             active.get("grading_points") or [],
             active.get("mode") or "quiz",
             active.get("correct_answer") or "",
-            use_ai=False,
+            use_ai=bool(os.environ.get("AI_API_KEY", "").strip()),
         )
         _save_professional_study_result(
             user_id,
