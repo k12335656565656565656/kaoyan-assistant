@@ -4990,6 +4990,26 @@ def _compact_question_context(point):
     return "\n".join(parts)
 
 
+def _minimal_professional_question_payload(point, mode, variant):
+    name = point.get("knowledge_name") or "当前知识点"
+    keywords = "、".join(_parse_json_list(point.get("keywords_json"))[:4])
+    mode_hint = {
+        "choice": "单选题，必须有A/B/C/D四个选项和唯一正确答案",
+        "blank": "填空题，空格挖在关键条件或步骤上",
+        "algorithm": "算法题或过程推演题，要给具体输入或条件",
+        "concept": "概念辨析题，要比较易混概念",
+        "application": "综合应用题，要给具体数据或场景",
+        "quiz": "综合应用题，要给具体数据或场景",
+    }.get(mode, "综合应用题，要给具体数据或场景")
+    prompt = (
+        f"你是408命题老师。围绕{name}出一道{mode_hint}。"
+        f"关键词：{keywords or name}。第{variant}次换题，请换数据或问法。"
+        "只输出JSON，包含question, reference_answer, grading_points。"
+        "如果是选择题，再包含options和correct_answer。"
+    )
+    return _parse_llm_json(_call_llm_api(prompt, max_tokens=900, temperature=0.35))
+
+
 def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, allow_fallback=False):
     fallback = _fallback_professional_question(point, mode, variant=variant)
     if not os.environ.get("AI_API_KEY", "").strip():
@@ -5017,6 +5037,9 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
         if not _is_valid_professional_question(generated, mode):
             repaired = _repair_professional_question_payload(raw, point, mode, variant)
             generated = _normalize_professional_question_payload(repaired, point, mode, fallback)
+        if not _is_valid_professional_question(generated, mode):
+            minimal = _minimal_professional_question_payload(point, mode, variant)
+            generated = _normalize_professional_question_payload(minimal, point, mode, fallback)
     except Exception as exc:
         warning = _format_llm_error(exc)
         if allow_fallback:
