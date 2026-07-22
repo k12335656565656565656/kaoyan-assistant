@@ -4590,6 +4590,18 @@ def _payload_first(payload, *keys):
     return ""
 
 
+def _coerce_text_list(value):
+    if isinstance(value, str):
+        return [
+            item.strip()
+            for item in re.split(r"[\n,，、;；]+", value)
+            if item.strip()
+        ]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
 def _build_local_quiz_question(name, exam_styles, keywords, variant=0):
     combined = " ".join([name, " ".join(exam_styles or []), " ".join(keywords or [])]).lower()
     style = exam_styles[0] if exam_styles else "应用分析"
@@ -4891,12 +4903,79 @@ def _generate_professional_question(point, mode="quiz", variant=0):
     return _question_generation_error(point, mode, warning or "AI 返回的题干为空或不完整。")
 
 
-def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, allow_fallback=True):
+def _normalize_professional_question_payload(payload, point, mode, fallback):
+    if not isinstance(payload, dict):
+        payload = {}
+    question = str(_payload_first(payload, "question", "题干", "题目", "练习题", "问题")).strip()
+    reference_answer = str(
+        _payload_first(
+            payload,
+            "reference_answer",
+            "standard_answer",
+            "answer",
+            "explanation",
+            "analysis",
+            "解析",
+            "解答",
+            "参考答案",
+            "标准答案",
+            "答案",
+        )
+    ).strip()
+    grading_points = _coerce_text_list(
+        _payload_first(payload, "grading_points", "score_points", "points", "评分点", "得分点", "要点")
+    )
+    options = _coerce_text_list(_payload_first(payload, "options", "choices", "选项"))
+    correct_answer = str(_payload_first(payload, "correct_answer", "正确答案", "答案选项")).strip()
+    similar_question = str(_payload_first(payload, "similar_question", "相似题", "同类题")).strip()
+    return {
+        "question_type": str(payload.get("question_type") or payload.get("题型") or fallback.get("question_type") or mode or "application"),
+        "question": question,
+        "options": options[:4],
+        "correct_answer": correct_answer,
+        "reference_answer": reference_answer,
+        "grading_points": grading_points[:8],
+        "similar_question": similar_question,
+    }
+
+
+def _is_valid_professional_question(generated, mode):
+    question = str(generated.get("question") or "").strip()
+    reference_answer = str(generated.get("reference_answer") or "").strip()
+    if _is_placeholder_question(question) or len(question) < 18 or not reference_answer:
+        return False
+    if mode == "choice":
+        options = generated.get("options") or []
+        if len(options) < 4 or not str(generated.get("correct_answer") or "").strip():
+            return False
+    return True
+
+
+def _repair_professional_question_payload(raw, point, mode, variant):
+    repair_prompt = f"""你是考研专业课命题老师。下面这段 AI 输出没有整理成系统需要的题目 JSON，请基于“当前知识点”和原输出，补全为一题可作答、可评分的考研专业课题。
+
+要求：
+1. 不要解释，不要展示思考过程，只输出一行 JSON。
+2. 字段固定为：{{"question_type":"choice|blank|application|algorithm|concept","question":"题干","options":["A. ...","B. ...","C. ...","D. ..."],"correct_answer":"B","reference_answer":"参考答案","grading_points":["评分点1","评分点2"],"similar_question":"相似题题干"}}
+3. 题干必须包含具体条件或明确任务，不能写“围绕某知识点作答”。
+4. 如果原输出不足，就直接根据当前知识点生成一题新的 408/专业课风格题。
+5. 如果不是选择题，options 可为空数组，correct_answer 可为空字符串。
+6. 第 {variant} 次换题，换场景、换数据或换问法。
+
+题型：{mode}
+当前知识点：
+{_point_context(point, include_source=False)}
+
+原输出：
+{str(raw or '')[:2500]}
+"""
+    return _parse_llm_json(_call_llm_api(repair_prompt, max_tokens=1800, temperature=0.35))
+
+
+def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, allow_fallback=False):
     fallback = _fallback_professional_question(point, mode, variant=variant)
     if not os.environ.get("AI_API_KEY", "").strip():
         warning = "未配置 AI_API_KEY，无法生成专业课练习题。"
-        if allow_fallback:
-            return _question_generation_error(point, mode, warning), warning
         return _question_generation_error(point, mode, warning), warning
     mode_guidance = {
         "choice": "生成一道408统考风格单选题，必须有 A/B/C/D 四个选项、唯一正确答案和解析。",
@@ -4924,49 +5003,32 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
 {_point_context(point, include_source=False)}
 """
     try:
-        payload = _parse_llm_json(_call_llm_api(prompt, max_tokens=2200, temperature=0.85))
+        raw = _call_llm_api(prompt, max_tokens=2200, temperature=0.75)
+        payload = _parse_llm_json(raw)
+        generated = _normalize_professional_question_payload(payload, point, mode, fallback)
+        if not _is_valid_professional_question(generated, mode):
+            repaired = _repair_professional_question_payload(raw, point, mode, variant)
+            generated = _normalize_professional_question_payload(repaired, point, mode, fallback)
     except Exception as exc:
         warning = _format_llm_error(exc)
         if allow_fallback:
             fallback["generation_warning"] = warning
             return fallback, warning
         return _question_generation_error(point, mode, warning), warning
-    question = str(_payload_first(payload, "question", "题干", "题目", "练习题")).strip()
-    reference_answer = str(_payload_first(payload, "reference_answer", "answer", "参考答案", "答案")).strip()
-    grading_points = _payload_first(payload, "grading_points", "points", "评分点", "要点") or []
-    options = _payload_first(payload, "options", "选项") or []
-    correct_answer = str(_payload_first(payload, "correct_answer", "正确答案", "答案选项")).strip()
-    similar_question = str(_payload_first(payload, "similar_question", "相似题", "同类题")).strip()
-    if _is_placeholder_question(question) or len(question) < 18 or not reference_answer:
+    if not _is_valid_professional_question(generated, mode):
         warning = "AI 返回的题干或参考答案不完整。"
         if allow_fallback:
             fallback["generation_warning"] = warning
             return fallback, warning
         return _question_generation_error(point, mode, warning), warning
-    if isinstance(grading_points, str):
-        grading_points = [
-            item.strip()
-            for item in re.split(r"[\n,，、;；]+", grading_points)
-            if item.strip()
-        ]
-    elif not isinstance(grading_points, list):
-        grading_points = []
-    if isinstance(options, str):
-        options = [
-            item.strip()
-            for item in re.split(r"[\n；;]+", options)
-            if item.strip()
-        ]
-    elif not isinstance(options, list):
-        options = []
     return {
-        "question_type": str(payload.get("question_type") or fallback.get("question_type") or mode or "application"),
-        "question": question,
-        "options": [str(item).strip() for item in options if str(item).strip()][:4],
-        "correct_answer": correct_answer,
-        "reference_answer": reference_answer,
-        "grading_points": [str(item).strip() for item in grading_points if str(item).strip()][:8],
-        "similar_question": similar_question or fallback.get("similar_question") or "",
+        "question_type": generated.get("question_type") or mode or "application",
+        "question": generated.get("question") or "",
+        "options": generated.get("options") or [],
+        "correct_answer": generated.get("correct_answer") or "",
+        "reference_answer": generated.get("reference_answer") or "",
+        "grading_points": generated.get("grading_points") or [],
+        "similar_question": generated.get("similar_question") or "",
     }, ""
 
 
