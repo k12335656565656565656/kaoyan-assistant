@@ -5051,6 +5051,33 @@ def _minimal_professional_question_payload(point, mode, variant):
     return _parse_llm_json(_call_llm_api(prompt, max_tokens=900, temperature=0.35))
 
 
+def _complete_professional_reference_payload(point, question):
+    prompt = (
+        "你是408考研阅卷老师。请给下面题目写参考答案和评分点。"
+        "只输出JSON，包含reference_answer和grading_points。"
+        "参考答案要能用于批改，评分点写成数组。\n"
+        f"知识点：{point.get('knowledge_name') or '当前知识点'}\n"
+        f"题目：{question}"
+    )
+    return _parse_llm_json(_call_llm_api(prompt, max_tokens=900, temperature=0.2))
+
+
+def _complete_reference_if_needed(generated, point):
+    question = str(generated.get("question") or "").strip()
+    reference = str(generated.get("reference_answer") or "").strip()
+    if _is_placeholder_question(question) or len(question) < 18 or reference:
+        return generated
+    payload = _complete_professional_reference_payload(point, question)
+    completed = dict(generated)
+    completed["reference_answer"] = str(
+        _payload_first(payload, "reference_answer", "standard_answer", "answer", "参考答案", "标准答案", "答案")
+    ).strip()
+    points = _coerce_text_list(_payload_first(payload, "grading_points", "score_points", "points", "评分点", "得分点", "要点"))
+    if points:
+        completed["grading_points"] = points[:8]
+    return completed
+
+
 def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, allow_fallback=False):
     fallback = _fallback_professional_question(point, mode, variant=variant)
     if not os.environ.get("AI_API_KEY", "").strip():
@@ -5078,12 +5105,15 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
         if not _is_valid_professional_question(generated, mode):
             loose_payload = _loose_professional_question_payload(raw)
             generated = _normalize_professional_question_payload(loose_payload, point, mode, fallback)
+            generated = _complete_reference_if_needed(generated, point)
         if not _is_valid_professional_question(generated, mode):
             repaired = _repair_professional_question_payload(raw, point, mode, variant)
             generated = _normalize_professional_question_payload(repaired, point, mode, fallback)
+            generated = _complete_reference_if_needed(generated, point)
         if not _is_valid_professional_question(generated, mode):
             minimal = _minimal_professional_question_payload(point, mode, variant)
             generated = _normalize_professional_question_payload(minimal, point, mode, fallback)
+            generated = _complete_reference_if_needed(generated, point)
     except Exception as exc:
         warning = _format_llm_error(exc)
         if allow_fallback:

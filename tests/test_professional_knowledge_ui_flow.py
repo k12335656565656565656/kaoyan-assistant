@@ -550,6 +550,33 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertIn("权值", generated["question"])
         self.assertIn("带权路径长度", generated["reference_answer"])
 
+    def test_ai_question_with_only_question_completes_reference(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        calls = {"count": 0}
+
+        def fake_llm(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return (
+                    '{"question":"给定字符 A,B,C,D 的权值分别为 2,5,7,9，'
+                    '请构造哈夫曼树并计算 WPL。"'
+                )
+            return '{"reference_answer":"按最小权值反复合并，并计算各叶子权值乘路径长度之和。","grading_points":["合并顺序","WPL计算"]}'
+
+        self.knowledge_base._call_llm_api = fake_llm
+        point = {
+            "knowledge_name": "哈夫曼树与哈夫曼编码",
+            "core_definition": "哈夫曼树是带权路径长度最小的二叉树。",
+            "keywords_json": '["哈夫曼树","WPL","前缀编码"]',
+        }
+
+        generated = self.knowledge_base._generate_professional_question(point, "application", variant=5)
+
+        self.assertFalse(generated.get("generation_failed"))
+        self.assertEqual(calls["count"], 2)
+        self.assertIn("合并", generated["reference_answer"])
+        self.assertEqual(generated["grading_points"], ["合并顺序", "WPL计算"])
+
     def test_clean_assistant_answer_removes_meta_text_and_source_markers(self):
         raw = (
             "现在开始写。\n"
