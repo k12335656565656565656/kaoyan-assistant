@@ -4972,6 +4972,24 @@ def _repair_professional_question_payload(raw, point, mode, variant):
     return _parse_llm_json(_call_llm_api(repair_prompt, max_tokens=1800, temperature=0.35))
 
 
+def _compact_question_context(point):
+    name = point.get("knowledge_name") or "当前知识点"
+    subject = point.get("subject") or point.get("chapter_name") or ""
+    definition = str(point.get("core_definition") or point.get("content") or point.get("review_content") or "").strip()
+    traps = str(point.get("common_traps") or point.get("mistake_prone") or "").strip()
+    keywords = "、".join(_parse_json_list(point.get("keywords_json"))[:6])
+    parts = [f"知识点：{name}"]
+    if subject:
+        parts.append(f"科目：{subject}")
+    if keywords:
+        parts.append(f"关键词：{keywords}")
+    if definition:
+        parts.append(f"核心：{definition[:280]}")
+    if traps:
+        parts.append(f"易错点：{traps[:160]}")
+    return "\n".join(parts)
+
+
 def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, allow_fallback=False):
     fallback = _fallback_professional_question(point, mode, variant=variant)
     if not os.environ.get("AI_API_KEY", "").strip():
@@ -4985,25 +5003,15 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
         "quiz": "生成一道综合应用题，题干必须有具体条件、任务和可评分步骤。",
         "concept": "生成一道概念辨析题，要求解释核心含义、适用条件和易混点。",
     }.get(mode, "生成一道综合应用题，题干必须具体可作答。")
-    prompt = f"""你是 408 计算机考研命题老师。请先读“当前知识点”的核心定义、考法、易错点、掌握标准和真题风格例题，再命题。
+    prompt = f"""你是408考研专业课命题老师。根据下面知识点出一题，难度中等，题干要有具体数据、条件或场景，不能写“围绕某知识点作答”。
+题型要求：{mode_guidance}
+只输出JSON，包含 question_type、question、options、correct_answer、reference_answer、grading_points、similar_question。
+非选择题 options 用空数组，correct_answer 可为空。第{variant}次换题，请更换数据或问法。
 
-要求：
-1. 题干必须有明确任务或具体场景，不能只写“围绕某知识点作答”。
-2. 适合考研专业课复习，难度中等，风格接近 408 统考：重视条件判断、过程推演、复杂度/字段/协议/状态变化。
-3. 不编造学校、年份、真题来源。
-4. {mode_guidance}
-5. 只输出一行 JSON，不要 Markdown，不要解释。字段固定为：{{"question_type":"choice|blank|application|algorithm|concept","question":"题干","options":["A. ...","B. ...","C. ...","D. ..."],"correct_answer":"B","reference_answer":"参考答案","grading_points":["评分点1","评分点2"],"similar_question":"相似题题干"}}
-6. 如果不是选择题，options 可为空数组，correct_answer 可为空字符串。
-7. 这是第 {variant} 次换题，必须换场景、换条件或换考法，不要复用上一次的题干模板。
-8. 若当前知识点内容不足，优先依据内置 408 知识库中的上下文补足；仍不足时给出中等难度通用 408 题，不要联网编造。
-9. 题干要像学生真的能作答的题：给出边集、地址位数、页表状态、协议字段、进程资源、输入串等具体条件；不要只要求“说明概念”。
-10. 变化种子：{uuid4().hex[:10]}。请据此更换题目数据和叙事场景。
-
-当前知识点：
-{_point_context(point, include_source=False)}
+{_compact_question_context(point)}
 """
     try:
-        raw = _call_llm_api(prompt, max_tokens=2200, temperature=0.75)
+        raw = _call_llm_api(prompt, max_tokens=1400, temperature=0.55)
         payload = _parse_llm_json(raw)
         generated = _normalize_professional_question_payload(payload, point, mode, fallback)
         if not _is_valid_professional_question(generated, mode):
