@@ -5099,13 +5099,19 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
 {_compact_question_context(point)}
 """
     try:
-        raw = _call_llm_api(prompt, max_tokens=1400, temperature=0.55)
-        payload = _parse_llm_json(raw)
-        generated = _normalize_professional_question_payload(payload, point, mode, fallback)
-        if not _is_valid_professional_question(generated, mode):
-            loose_payload = _loose_professional_question_payload(raw)
-            generated = _normalize_professional_question_payload(loose_payload, point, mode, fallback)
-            generated = _complete_reference_if_needed(generated, point)
+        raw = ""
+        generated = {}
+        for attempt in range(2):
+            retry_prompt = prompt if attempt == 0 else f"{prompt}\n请重新换一组题目数据，直接给可作答题目。"
+            raw = _call_llm_api(retry_prompt, max_tokens=1400, temperature=0.5 + attempt * 0.08)
+            payload = _parse_llm_json(raw)
+            generated = _normalize_professional_question_payload(payload, point, mode, fallback)
+            if not _is_valid_professional_question(generated, mode):
+                loose_payload = _loose_professional_question_payload(raw)
+                generated = _normalize_professional_question_payload(loose_payload, point, mode, fallback)
+                generated = _complete_reference_if_needed(generated, point)
+            if _is_valid_professional_question(generated, mode):
+                break
         if not _is_valid_professional_question(generated, mode):
             repaired = _repair_professional_question_payload(raw, point, mode, variant)
             generated = _normalize_professional_question_payload(repaired, point, mode, fallback)
