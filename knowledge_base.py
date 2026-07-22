@@ -4602,6 +4602,47 @@ def _coerce_text_list(value):
     return []
 
 
+def _json_string_field(raw, field):
+    match = re.search(
+        rf'"{re.escape(field)}"\s*:\s*"((?:\\.|[^"\\])*)"',
+        str(raw or ""),
+        re.DOTALL,
+    )
+    if not match:
+        return ""
+    value = match.group(1)
+    try:
+        return json.loads(f'"{value}"')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return value.replace("\\n", "\n").replace('\\"', '"')
+
+
+def _loose_professional_question_payload(raw):
+    text = str(raw or "")
+    payload = {
+        "question_type": _json_string_field(text, "question_type"),
+        "question": _json_string_field(text, "question"),
+        "correct_answer": _json_string_field(text, "correct_answer"),
+        "reference_answer": _json_string_field(text, "reference_answer"),
+        "similar_question": _json_string_field(text, "similar_question"),
+    }
+    points = re.findall(r'"grading_points"\s*:\s*\[(.*?)\]', text, re.DOTALL)
+    if points:
+        payload["grading_points"] = [
+            item.strip()
+            for item in re.findall(r'"((?:\\.|[^"\\])*)"', points[0])
+            if item.strip()
+        ]
+    options = re.findall(r'"options"\s*:\s*\[(.*?)\]', text, re.DOTALL)
+    if options:
+        payload["options"] = [
+            item.strip()
+            for item in re.findall(r'"((?:\\.|[^"\\])*)"', options[0])
+            if item.strip()
+        ]
+    return payload
+
+
 def _build_local_quiz_question(name, exam_styles, keywords, variant=0):
     combined = " ".join([name, " ".join(exam_styles or []), " ".join(keywords or [])]).lower()
     style = exam_styles[0] if exam_styles else "应用分析"
@@ -5034,6 +5075,9 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
         raw = _call_llm_api(prompt, max_tokens=1400, temperature=0.55)
         payload = _parse_llm_json(raw)
         generated = _normalize_professional_question_payload(payload, point, mode, fallback)
+        if not _is_valid_professional_question(generated, mode):
+            loose_payload = _loose_professional_question_payload(raw)
+            generated = _normalize_professional_question_payload(loose_payload, point, mode, fallback)
         if not _is_valid_professional_question(generated, mode):
             repaired = _repair_professional_question_payload(raw, point, mode, variant)
             generated = _normalize_professional_question_payload(repaired, point, mode, fallback)

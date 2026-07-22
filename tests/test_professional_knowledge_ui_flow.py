@@ -529,6 +529,27 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertIn("AI 返回的题干或参考答案不完整", generated.get("generation_warning", ""))
         self.assertNotIn("填空：做“哈夫曼树与哈夫曼编码”相关题时", generated["question"])
 
+    def test_truncated_ai_question_json_can_still_be_used(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        self.knowledge_base._call_llm_api = lambda *args, **kwargs: (
+            '```json\n{"question_type":"application",'
+            '"question":"给定字符 A,B,C,D 的权值分别为 2,5,7,9，请构造哈夫曼树并计算 WPL。",'
+            '"options":[],'
+            '"correct_answer":"",'
+            '"reference_answer":"先选 2 和 5 合并为 7，再按最小权值继续合并，最后计算每个叶子的带权路径长度之和。"'
+        )
+        point = {
+            "knowledge_name": "哈夫曼树与哈夫曼编码",
+            "core_definition": "哈夫曼树是带权路径长度最小的二叉树。",
+            "keywords_json": '["哈夫曼树","WPL","前缀编码"]',
+        }
+
+        generated = self.knowledge_base._generate_professional_question(point, "application", variant=4)
+
+        self.assertFalse(generated.get("generation_failed"))
+        self.assertIn("权值", generated["question"])
+        self.assertIn("带权路径长度", generated["reference_answer"])
+
     def test_clean_assistant_answer_removes_meta_text_and_source_markers(self):
         raw = (
             "现在开始写。\n"
