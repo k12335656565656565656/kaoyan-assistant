@@ -37,7 +37,7 @@ from wrongbook_utils import (
     split_wrongbook_answer_explanation,
 )
 
-load_dotenv(Path(__file__).with_name(".env"))
+load_dotenv(Path(__file__).with_name(".env"), override=True)
 
 # ==================== 配置 ====================
 st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide", initial_sidebar_state="expanded")

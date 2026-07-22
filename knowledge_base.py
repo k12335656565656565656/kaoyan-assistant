@@ -9,7 +9,7 @@ import os
 import hashlib
 import html
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
 import json
 import base64
 import re
