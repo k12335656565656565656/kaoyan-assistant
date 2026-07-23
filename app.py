@@ -403,6 +403,41 @@ st.markdown("""
         background: #f1f5f9 !important; color: #4f46e5 !important;
         transform: translateX(3px) !important;
     }
+    .nav-link {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: calc(100% - 8px);
+        margin: 2px 4px;
+        padding: 10px 14px;
+        border-radius: 10px;
+        color: #64748b !important;
+        text-decoration: none !important;
+        font-size: 0.88rem;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .nav-link:hover {
+        background: #f1f5f9;
+        color: #4f46e5 !important;
+        transform: translateX(3px);
+    }
+    .nav-link .nav-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        flex-shrink: 0;
+    }
+    .nav-link[data-page="hub"] .nav-dot { background: #4f46e5; box-shadow: 0 0 6px rgba(79,70,229,0.4); }
+    .nav-link[data-page="main"] .nav-dot { background: #3b82f6; box-shadow: 0 0 6px rgba(59,130,246,0.4); }
+    .nav-link[data-page="professional_kb"] .nav-dot { background: #7c3aed; box-shadow: 0 0 6px rgba(124,58,237,0.4); }
+    .nav-link[data-page="english"] .nav-dot { background: #059669; box-shadow: 0 0 6px rgba(5,150,105,0.4); }
+    .nav-link[data-page="checkin"] .nav-dot { background: #16a34a; box-shadow: 0 0 6px rgba(22,163,74,0.4); }
+    .nav-link[data-page="popularity"] .nav-dot { background: #db2777; box-shadow: 0 0 6px rgba(219,39,119,0.4); }
+    .nav-link[data-page="material"] .nav-dot { background: #ca8a04; box-shadow: 0 0 6px rgba(202,138,4,0.4); }
+    .nav-link[data-page="suggest"] .nav-dot { background: #0284c7; box-shadow: 0 0 6px rgba(2,132,199,0.4); }
+    .nav-link[data-page="wrongbook"] .nav-dot { background: #7c3aed; box-shadow: 0 0 6px rgba(124,58,237,0.4); }
 
     /* ── Sidebar User Card ── */
     .sidebar-user {
@@ -573,6 +608,14 @@ st.markdown("""
         transform: translateY(-4px);
         box-shadow: 0 4px 12px rgba(0,0,0,0.06), 0 12px 32px rgba(99,102,241,0.1);
         border-color: rgba(99,102,241,0.25);
+    }
+    .feature-card-link,
+    .feature-card-link:hover,
+    .feature-card-link:visited {
+        color: inherit !important;
+        text-decoration: none !important;
+        display: block;
+        height: 100%;
     }
     .feature-card .card-icon {
         width: 48px; height: 48px; border-radius: 14px;
@@ -4280,13 +4323,22 @@ if not st.session_state.logged_in:
 _uid = st.session_state.get("user_id")
 _qp = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
 
-# ── 保存成功后跳转错题本页面（HTTP 保存方案，无 payload）──
-_nav = _qp.get("nav", "")
-if isinstance(_nav, list): _nav = _nav[0] if _nav else ""
-if _nav == "wrongbook":
-    st.session_state.page = "wrongbook"
-    if hasattr(st, "query_params") and "nav" in st.query_params:
-        del st.query_params["nav"]
+# ── 普通链接导航：避免公网加载时 st.button 骨架屏导致入口不可点 ──
+_VALID_PAGES = {
+    "hub", "main", "professional_kb", "english", "checkin",
+    "popularity", "material", "suggest", "wrongbook",
+}
+_nav = _qp.get("page", "") or _qp.get("nav", "")
+if isinstance(_nav, list):
+    _nav = _nav[0] if _nav else ""
+if _nav in _VALID_PAGES:
+    st.session_state.page = _nav
+    if hasattr(st, "query_params"):
+        for _nav_key in ("page", "nav"):
+            if _nav_key in st.query_params:
+                del st.query_params[_nav_key]
+    else:
+        st.experimental_set_query_params()
     st.rerun()
 
 # ── 错题保存 ──
@@ -4347,9 +4399,7 @@ with st.sidebar:
         if current_page == p:
             st.markdown(f'<div class="nav-item nav-item-active" data-nav="{p}"><span class="nav-dot"></span>{label}</div>', unsafe_allow_html=True)
         else:
-            if st.button(label, key=f"nav_{p}", use_container_width=True):
-                st.session_state.page = p
-                st.rerun()
+            st.markdown(f'<a class="nav-link" data-page="{p}" href="?page={p}"><span class="nav-dot"></span>{label}</a>', unsafe_allow_html=True)
 
     # 导航分组 2: 辅助工具
     st.markdown('<div class="sidebar-section-label">辅助工具</div>', unsafe_allow_html=True)
@@ -4363,9 +4413,7 @@ with st.sidebar:
         if current_page == p:
             st.markdown(f'<div class="nav-item nav-item-active" data-nav="{p}"><span class="nav-dot"></span>{label}</div>', unsafe_allow_html=True)
         else:
-            if st.button(label, key=f"nav_{p}", use_container_width=True):
-                st.session_state.page = p
-                st.rerun()
+            st.markdown(f'<a class="nav-link" data-page="{p}" href="?page={p}"><span class="nav-dot"></span>{label}</a>', unsafe_allow_html=True)
 
     st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
 
@@ -5398,22 +5446,22 @@ if st.session_state.page == "hub":
         with col:
             tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
             st.markdown(f"""
+            <a class="feature-card-link" href="?page={target}" aria-label="进入{title}">
             <div class="feature-card">
                 <div class="card-icon {icon_cls}">{icon_svg}</div>
                 <div class="card-title">{title}</div>
                 <div class="card-desc">{desc}</div>
                 {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
             </div>
+            </a>
             """, unsafe_allow_html=True)
-            if st.button("进入", key=f"hub_{key}", use_container_width=True):
-                st.session_state.page = target
-                st.rerun()
 
     # ── Row 3: 2 Wide Cards ──
     wc1, wc2 = st.columns(2)
 
     with wc1:
         st.markdown("""
+        <a class="feature-card-link" href="?page=material" aria-label="进入学习资料生成">
         <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
             <div class="card-icon icon-mat" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
             <div style="flex:1;">
@@ -5424,13 +5472,12 @@ if st.session_state.page == "hub":
                 </div>
             </div>
         </div>
+        </a>
         """, unsafe_allow_html=True)
-        if st.button("进入", key="hub_material", use_container_width=True):
-            st.session_state.page = "material"
-            st.rerun()
 
     with wc2:
         st.markdown("""
+        <a class="feature-card-link" href="?page=checkin" aria-label="进入打卡督学">
         <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
             <div class="card-icon icon-ck" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
             <div style="flex:1;">
@@ -5441,10 +5488,8 @@ if st.session_state.page == "hub":
                 </div>
             </div>
         </div>
+        </a>
         """, unsafe_allow_html=True)
-        if st.button("进入", key="hub_checkin", use_container_width=True):
-            st.session_state.page = "checkin"
-            st.rerun()
 
     st.stop()
 
