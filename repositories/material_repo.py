@@ -209,13 +209,15 @@ def create_material(
             now_str,
         ),
     )
-    return get_material(conn, cursor.lastrowid)
+    return get_material(conn, cursor.lastrowid, user_id=user_id)
 
 
 def save_extraction_result(
     conn,
     material_id: int,
     material_result: Any = None,
+    *,
+    user_id: int,
     **updates,
 ) -> dict:
     ensure_material_schema(conn)
@@ -246,7 +248,7 @@ def save_extraction_result(
            SET source_type=?, process_method=?, raw_extracted_text=?,
                extracted_text=?, material_result_json=?, content_hash=?,
                processing_status=?, error_message=?, updated_at=?
-           WHERE id=?""",
+           WHERE id=? AND user_id=?""",
         (
             source_type or "",
             process_method or "",
@@ -258,9 +260,10 @@ def save_extraction_result(
             error_message or "",
             _now(),
             material_id,
+            user_id,
         ),
     )
-    return get_material(conn, material_id)
+    return get_material(conn, material_id, user_id=user_id)
 
 
 def save_confirmed_text(
@@ -268,6 +271,7 @@ def save_confirmed_text(
     material_id: int,
     confirmed_text: str,
     *,
+    user_id: int,
     content_hash: str = "",
     status: str = "text_confirmed",
 ) -> dict:
@@ -276,16 +280,17 @@ def save_confirmed_text(
         """UPDATE user_materials
            SET confirmed_text=?, content_hash=?, processing_status=?,
                error_message='', updated_at=?
-           WHERE id=?""",
+           WHERE id=? AND user_id=?""",
         (
             confirmed_text or "",
             content_hash or _content_hash(confirmed_text),
             status or "text_confirmed",
             _now(),
             material_id,
+            user_id,
         ),
     )
-    return get_material(conn, material_id)
+    return get_material(conn, material_id, user_id=user_id)
 
 
 def save_workflow_snapshot(
@@ -293,6 +298,7 @@ def save_workflow_snapshot(
     material_id: int,
     workflow_snapshot: Any,
     *,
+    user_id: int,
     status: str | None = None,
 ) -> dict:
     ensure_material_schema(conn)
@@ -304,39 +310,48 @@ def save_workflow_snapshot(
     if status:
         assignments.append("processing_status=?")
         params.append(status)
-    params.append(material_id)
+    params.extend((material_id, user_id))
     conn.execute(
-        f"UPDATE user_materials SET {', '.join(assignments)} WHERE id=?",
+        f"UPDATE user_materials SET {', '.join(assignments)} WHERE id=? AND user_id=?",
         tuple(params),
     )
-    return get_material(conn, material_id)
+    return get_material(conn, material_id, user_id=user_id)
 
 
 def mark_material_status(
     conn,
     material_id: int,
     status: str,
+    *,
+    user_id: int,
     error_message: str | None = None,
 ) -> dict:
     ensure_material_schema(conn)
     if error_message is None:
         conn.execute(
             """UPDATE user_materials
-               SET processing_status=?, updated_at=? WHERE id=?""",
-            (status, _now(), material_id),
+               SET processing_status=?, updated_at=? WHERE id=? AND user_id=?""",
+            (status, _now(), material_id, user_id),
         )
     else:
         conn.execute(
             """UPDATE user_materials
-               SET processing_status=?, error_message=?, updated_at=? WHERE id=?""",
-            (status, error_message or "", _now(), material_id),
+               SET processing_status=?, error_message=?, updated_at=?
+               WHERE id=? AND user_id=?""",
+            (status, error_message or "", _now(), material_id, user_id),
         )
-    return get_material(conn, material_id)
+    return get_material(conn, material_id, user_id=user_id)
 
 
-def get_material(conn, material_id: int) -> dict:
+def get_material(conn, material_id: int, *, user_id: int | None = None) -> dict:
     ensure_material_schema(conn)
-    cursor = conn.execute("SELECT * FROM user_materials WHERE id=?", (material_id,))
+    if user_id is None:
+        cursor = conn.execute("SELECT * FROM user_materials WHERE id=?", (material_id,))
+    else:
+        cursor = conn.execute(
+            "SELECT * FROM user_materials WHERE id=? AND user_id=?",
+            (material_id, user_id),
+        )
     return _row_to_dict(cursor, cursor.fetchone())
 
 

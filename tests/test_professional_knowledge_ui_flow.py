@@ -2,9 +2,12 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import time
 import unittest
+from io import BytesIO
 from pathlib import Path
 
+from docx import Document
 from streamlit.testing.v1 import AppTest
 
 
@@ -24,8 +27,10 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.db_path = self.temp_dir / "memory.db"
         self.original_memory_db_env = os.environ.get("MEMORY_DB")
         self.original_api_key_env = os.environ.get("AI_API_KEY")
+        self.original_standalone_user_env = os.environ.get("KAOYAN_STANDALONE_USER_ID")
         os.environ["MEMORY_DB"] = str(self.db_path)
         os.environ["AI_API_KEY"] = ""
+        os.environ["KAOYAN_STANDALONE_USER_ID"] = "1"
 
         import knowledge_base
         import professional_knowledge.catalog as catalog
@@ -63,6 +68,10 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             os.environ.pop("AI_API_KEY", None)
         else:
             os.environ["AI_API_KEY"] = self.original_api_key_env
+        if self.original_standalone_user_env is None:
+            os.environ.pop("KAOYAN_STANDALONE_USER_ID", None)
+        else:
+            os.environ["KAOYAN_STANDALONE_USER_ID"] = self.original_standalone_user_env
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _run_app(self):
@@ -160,11 +169,9 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             raise AssertionError(app.exception)
 
         self.assertTrue(self._markdown_contains(app, "专业课学习"))
-        self.assertTrue(self._markdown_contains(app, "拖放文件到这里"))
-        self.assertTrue(self._markdown_contains(app, "单个文件最大 200MB"))
-        self.assertTrue(self._markdown_contains(app, "选择文件"))
         self.assertTrue(self._markdown_contains(app, "408综合知识库"))
         self.assertTrue(self._markdown_contains(app, "栈"))
+        self.assertTrue(any(item.label == "上传考试大纲" for item in app.get("file_uploader")))
         self.assertFalse(any(item.label == "粘贴文本" for item in app.text_area))
         self.assertFalse(any(item.label == "确认文本并开始识别" for item in app.button))
         self.assertFalse(any(item.label == "继续处理这份资料" for item in app.button))
@@ -255,16 +262,17 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertFalse(self.knowledge_base._is_syllabus_source({"chapter_name": "数据结构讲义"}))
 
     def test_408_builtin_chat_answers_without_uploaded_sources(self):
-        app = self._run_app()
+        answer = self.knowledge_base._answer_subject_question(
+            1,
+            "408综合",
+            [],
+            "TCP 三次握手为什么不是两次？",
+            answer_mode="custom",
+        )
 
-        _find_by_label(app.text_input, "基于资料提问").set_value("TCP 三次握手为什么不是两次？")
-        _find_by_label(app.button, "发送").click().run()
-        if app.exception:
-            raise AssertionError(app.exception)
-
-        self.assertTrue(self._markdown_contains(app, "408 内置知识库"))
-        self.assertTrue(self._markdown_contains(app, "TCP 连接管理"))
-        self.assertFalse(self._markdown_contains(app, "请先在左侧至少勾选一份资料"))
+        self.assertIn("TCP", answer)
+        self.assertIn("三次握手", answer)
+        self.assertNotIn("请先在左侧至少勾选一份资料", answer)
 
     def test_multiple_knowledge_rows_can_stay_expanded(self):
         app = self._run_app()
@@ -279,7 +287,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertTrue(self._markdown_contains(app, "AOV 网用顶点表示活动"))
         self.assertTrue(self._markdown_contains(app, "B 树和 B+ 树是多路平衡查找树"))
         self.assertTrue(self._markdown_contains(app, "掌握标准"))
-        self.assertTrue(self._markdown_contains(app, "真题风格例题"))
+        self.assertFalse(self._markdown_contains(app, "真题风格例题"))
 
     def test_quiz_panel_appears_under_selected_knowledge(self):
         self._enable_fake_professional_ai()
@@ -369,6 +377,8 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertIn("mistake_reason", result)
         self.assertIn("next_review", result)
         self.assertIn("similar_question", result)
+        self.assertEqual(result["grading_source"], "local_estimate")
+        self.assertFalse(result["is_authoritative"])
 
     def test_fast_grading_does_not_call_llm_even_when_key_exists(self):
         os.environ["AI_API_KEY"] = "test-key"
@@ -426,6 +436,28 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertEqual(result["standard_answer"], "应先写地址字段划分，再说明查找流程。")
         self.assertEqual(result["corrected_answer"], "地址分为标记、组号、块内地址三部分，并按组号定位。")
         self.assertEqual(result["score_breakdown"][0]["point"], "字段划分")
+        self.assertEqual(result["grading_source"], "ai")
+        self.assertTrue(result["is_authoritative"])
+
+    def test_ai_grading_failure_is_marked_as_local_estimate(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        self.knowledge_base._call_llm_api = lambda *args, **kwargs: (_ for _ in ()).throw(
+            TimeoutError("simulated timeout")
+        )
+
+        result = self.knowledge_base._grade_professional_answer(
+            {"knowledge_name": "Cache", "core_definition": "Cache 利用局部性。"},
+            "解释 Cache 的作用。",
+            "利用局部性加快访问。",
+            "利用局部性减少平均访存时间。",
+            ["局部性", "平均访存时间"],
+            "application",
+            use_ai=True,
+        )
+
+        self.assertEqual(result["grading_source"], "local_estimate")
+        self.assertFalse(result["is_authoritative"])
+        self.assertIn("不计入正式学习进度", result["grading_warning"])
 
     def test_llm_api_uses_configured_default_model(self):
         captured = {}
@@ -513,6 +545,56 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertIn("AI 出题暂时不可用", generated["question"])
         self.assertNotIn("围绕“哈夫曼树与哈夫曼编码”做题时", generated["question"])
         self.assertNotIn("若题干改变约束条件", generated["question"])
+
+    def test_successful_regeneration_clears_sticky_failure_state(self):
+        active = {
+            "question": "AI 出题暂时不可用",
+            "generation_failed": True,
+            "generation_warning": "超时",
+            "result": {"score": 0},
+        }
+        generated = {
+            "question": "给定一个 AOV 网，请写出一种拓扑序列。",
+            "reference_answer": "反复选择入度为 0 的顶点。",
+            "generation_failed": False,
+            "generation_warning": "",
+        }
+
+        merged = self.knowledge_base._merge_generated_question_state(active, generated)
+
+        self.assertNotIn("generation_failed", merged)
+        self.assertNotIn("generation_warning", merged)
+        self.assertNotIn("result", merged)
+        self.assertIn("拓扑序列", merged["question"])
+
+    def test_main_question_request_uses_one_transient_retry(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        captured = {}
+
+        def fake_llm(prompt, **kwargs):
+            captured.update(kwargs)
+            return (
+                '{"question_type":"application",'
+                '"question":"给定 AOV 网边集 A->C、B->C、C->D，请写出一种拓扑序列并说明判环方法。",'
+                '"options":[],"correct_answer":"",'
+                '"reference_answer":"反复输出入度为 0 的顶点；若无法输出全部顶点则存在环。",'
+                '"grading_points":["入度更新","拓扑序列","判环"]}'
+            )
+
+        self.knowledge_base._call_llm_api = fake_llm
+        generated, warning = self.knowledge_base._generate_professional_question_with_ai(
+            {
+                "knowledge_name": "AOV 网与活动排序",
+                "core_definition": "拓扑排序用于有向无环图。",
+                "keywords_json": '["AOV网","拓扑排序","入度"]',
+            },
+            "application",
+            variant=2,
+        )
+
+        self.assertEqual(warning, "")
+        self.assertFalse(generated["generation_failed"])
+        self.assertEqual(captured["retries"], 1)
 
     def test_configured_ai_incomplete_question_does_not_use_local_template(self):
         os.environ["AI_API_KEY"] = "test-key"
@@ -619,6 +701,102 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertTrue(self._markdown_contains(app, "填空题"))
         self.assertEqual(len(app.info), 1)
         self.assertEqual(len(app.error), 0)
+
+    def test_blank_answer_array_is_rendered_as_readable_text(self):
+        normalized = self.knowledge_base._normalize_professional_question_payload(
+            {
+                "question_type": "blank",
+                "question": "快速排序平均时间复杂度为 ______，归并排序是 ______ 排序。",
+                "options": [],
+                "correct_answer": ["O(nlogn)", "稳定"],
+                "reference_answer": "第一空填 O(nlogn)，第二空填稳定。",
+                "grading_points": ["复杂度", "稳定性"],
+            },
+            {"knowledge_name": "内部排序算法比较"},
+            "blank",
+            self.knowledge_base._empty_professional_question_payload("blank"),
+        )
+
+        self.assertEqual(normalized["correct_answer"], "O(nlogn)；稳定")
+        self.assertTrue(
+            self.knowledge_base._is_valid_professional_question_for_point(
+                normalized,
+                "blank",
+                {"knowledge_name": "内部排序算法比较"},
+            )
+        )
+
+    def test_conflicting_ai_reference_is_rejected(self):
+        generated = {
+            "question_type": "blank",
+            "question": "快速排序最坏时间复杂度为 ______。",
+            "options": [],
+            "correct_answer": "O(n)",
+            "reference_answer": "严格来说，快速排序最坏时间复杂度为 O(n^2)，但答案给出 O(n)。",
+            "grading_points": ["复杂度"],
+        }
+
+        self.assertFalse(
+            self.knowledge_base._is_valid_professional_question_for_point(
+                generated,
+                "blank",
+                {"knowledge_name": "内部排序算法比较"},
+            )
+        )
+
+    def test_blank_question_accepts_supported_shortest_path_answers(self):
+        generated = {
+            "question_type": "blank",
+            "question": "带权有向图从 A 到 D 的边有 A->B=2、A->C=6、B->D=3、C->D=1。先确定的中间顶点是 ______，A 到 D 的最短路径长度为 ______。",
+            "options": [],
+            "correct_answer": "B；5",
+            "reference_answer": "第一空填 B，因为 Dijkstra 初始距离中 B 的距离 2 最小，应先确定 B。第二空填 5，经过 B 松弛后 A 到 D 的距离为 2+3=5，小于经 C 的 7。",
+            "grading_points": ["先确定最小距离顶点", "完成松弛", "写出最短路径长度"],
+        }
+
+        self.assertTrue(
+            self.knowledge_base._is_valid_professional_question_for_point(
+                generated,
+                "blank",
+                {"knowledge_name": "最短路径算法", "subject": "数据结构"},
+            )
+        )
+
+    def test_blank_question_rejects_answer_not_supported_by_reference(self):
+        generated = {
+            "question_type": "blank",
+            "question": "带权有向图从 A 到 D 的边有 A->B=2、A->C=6、B->D=3、C->D=1。先确定的中间顶点是 ______，A 到 D 的最短路径长度为 ______。",
+            "options": [],
+            "correct_answer": "B；7",
+            "reference_answer": "第一空填 B，因为 Dijkstra 初始距离中 B 的距离 2 最小，应先确定 B。第二空填 5，经过 B 松弛后 A 到 D 的距离为 2+3=5，小于经 C 的 7。",
+            "grading_points": ["先确定最小距离顶点", "完成松弛", "写出最短路径长度"],
+        }
+
+        self.assertFalse(
+            self.knowledge_base._is_valid_professional_question_for_point(
+                generated,
+                "blank",
+                {"knowledge_name": "最短路径算法", "subject": "数据结构"},
+            )
+        )
+
+    def test_blank_marker_variants_are_accepted(self):
+        generated = {
+            "question_type": "blank",
+            "question": "在 Dijkstra 算法中，若存在负权边但无负权回路，应改用（ ）算法处理单源最短路径。",
+            "options": [],
+            "correct_answer": "Bellman-Ford",
+            "reference_answer": "空处填 Bellman-Ford。Dijkstra 依赖每次确定的最短距离不会再变小，负权边会破坏这个性质；Bellman-Ford 通过多轮松弛处理含负权边的单源最短路径。",
+            "grading_points": ["识别负权条件", "说明 Dijkstra 限制", "给出替代算法"],
+        }
+
+        self.assertTrue(
+            self.knowledge_base._is_valid_professional_question_for_point(
+                generated,
+                "blank",
+                {"knowledge_name": "最短路径算法", "subject": "数据结构"},
+            )
+        )
 
     def test_question_variant_changes_between_starts(self):
         self._enable_fake_professional_ai()
@@ -731,23 +909,44 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
 
     def test_formal_knowledge_base_follows_selected_subject(self):
         self._seed_knowledge("408综合", "栈")
-        self._seed_knowledge("医学考研", "肺炎")
+        self.catalog.save_custom_subject_profile(
+            {
+                "key": "custom_management",
+                "catalog": {
+                    "title": "管理学原理",
+                    "subject_label": "管理学原理",
+                    "status": "已启用",
+                    "stage": "测试",
+                    "summary": "测试用自定义专业课。",
+                    "capabilities": ["知识点抽取"],
+                    "source_strategy": "测试数据",
+                    "notes": "测试不同专业课知识库隔离。",
+                    "enabled": True,
+                },
+                "local_source": None,
+                "max_points": 12,
+                "exam_subjects": ["管理学原理"],
+                "extraction_guidance": "测试。",
+            },
+            custom_config_path=self.catalog.CUSTOM_SUBJECTS_CONFIG_PATH,
+        )
+        self._seed_knowledge("管理学原理", "计划职能")
         app = self._run_app()
         _find_by_label(app.radio, "专业课功能").set_value("高级知识条目管理").run()
         if app.exception:
             raise AssertionError(app.exception)
         self.assertTrue(self._markdown_contains(app, "408综合知识库"))
         self.assertTrue(self._markdown_contains(app, "栈"))
-        self.assertFalse(self._markdown_contains(app, "肺炎的核心定义"))
+        self.assertFalse(self._markdown_contains(app, "计划职能的核心定义"))
 
-        _find_by_label(app.selectbox, "专业课").set_value("医学考研").run()
+        _find_by_label(app.selectbox, "专业课").set_value("管理学原理").run()
         if app.exception:
             raise AssertionError(app.exception)
         _find_by_label(app.radio, "专业课功能").set_value("高级知识条目管理").run()
         if app.exception:
             raise AssertionError(app.exception)
-        self.assertTrue(self._markdown_contains(app, "医学考研知识库"))
-        self.assertTrue(self._markdown_contains(app, "肺炎"))
+        self.assertTrue(self._markdown_contains(app, "管理学原理知识库"))
+        self.assertTrue(self._markdown_contains(app, "计划职能"))
         self.assertFalse(self._markdown_contains(app, "栈的核心定义"))
 
     def test_selected_knowledge_and_detail_stay_in_sync(self):
@@ -847,6 +1046,57 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             self.knowledge_base.search_web = original_search
             self.knowledge_base._call_llm_api = original_llm
 
+    def test_web_supplement_query_follows_current_subject(self):
+        query_408 = self.knowledge_base._build_web_supplement_query(
+            {
+                "subject": "408综合",
+                "subject_area": "数据结构",
+                "knowledge_name": "最短路径算法",
+            }
+        )
+        query_history = self.knowledge_base._build_web_supplement_query(
+            {
+                "subject": "历史学基础",
+                "subject_area": "中国古代史",
+                "knowledge_name": "均田制",
+            }
+        )
+
+        self.assertIn("408", query_408)
+        self.assertIn("最短路径算法", query_408)
+        self.assertIn("历史学基础", query_history)
+        self.assertIn("均田制", query_history)
+        self.assertNotIn("408", query_history)
+
+    def test_failed_chat_job_is_not_cached_as_a_normal_answer(self):
+        original_answer = self.knowledge_base._answer_subject_question
+        self.knowledge_base._answer_subject_question = (
+            lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("simulated timeout"))
+        )
+        cache_id = "failed-chat-test"
+        try:
+            job_id = self.knowledge_base._start_chat_answer_background(
+                1,
+                "408综合",
+                [],
+                "解释拓扑排序",
+                "custom",
+                cache_id,
+            )
+            deadline = time.time() + 2
+            job = self.knowledge_base._get_chat_job(job_id)
+            while job and job.get("status") == "running" and time.time() < deadline:
+                time.sleep(0.01)
+                job = self.knowledge_base._get_chat_job(job_id)
+            answer_cache = {}
+            self.knowledge_base._sync_chat_answer_from_job(answer_cache, cache_id, job_id)
+        finally:
+            self.knowledge_base._answer_subject_question = original_answer
+
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(answer_cache[cache_id]["status"], "failed")
+        self.assertNotIn("answer", answer_cache[cache_id])
+
     def test_knowledge_card_quiz_records_feedback_and_memory(self):
         self._enable_fake_professional_ai()
         self._seed_knowledge("408综合", "页式虚拟存储器")
@@ -897,7 +1147,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         _find_by_label(app.text_area, "希望系统重点识别什么（可选）").set_value(
             "优先识别理论流派、代表人物和易混点。"
         )
-        _find_by_label(app.button, "创建并开始导入资料").click().run()
+        _find_by_label(app.button, "创建专业课").click().run()
         if app.exception:
             raise AssertionError(app.exception)
 
@@ -946,11 +1196,66 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
 
         self.assertEqual(calls, [True])
 
+    def test_saved_question_review_uses_ai_grading_when_api_key_is_configured(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        self._seed_knowledge("408综合", "AOV 网与活动排序")
+        with sqlite3.connect(self.db_path) as conn:
+            point_id = conn.execute(
+                "SELECT id FROM user_knowledge WHERE subject=? AND knowledge_name=?",
+                ("408综合", "AOV 网与活动排序"),
+            ).fetchone()[0]
+            from repositories.professional_learning_repo import save_generated_question
+
+            save_generated_question(
+                conn,
+                user_id=1,
+                subject="408综合",
+                knowledge_id=point_id,
+                question="请给出 AOV 网的一个拓扑序列，并说明判断依据。",
+                reference_answer="先选入度为 0 的顶点，若所有顶点都输出则无环。",
+                grading_points=["入度为0", "拓扑序列", "有向无环图"],
+                source_mode="application",
+            )
+            conn.commit()
+
+        calls = []
+        original_grade = self.knowledge_base._grade_professional_answer
+
+        def fake_grade(*args, **kwargs):
+            calls.append(kwargs.get("use_ai"))
+            return {
+                "score": 86,
+                "feedback": "关键步骤基本完整。",
+                "rating": "good",
+                "missed_points": ["环的判断"],
+                "mistake_reason": "最后一步没有说明未输出顶点时表示有环。",
+                "next_review": "复习拓扑排序判环过程。",
+                "similar_question": "换一张 AOV 网再写拓扑序列。",
+            }
+
+        self.knowledge_base._grade_professional_answer = fake_grade
+        try:
+            app = self._run_app()
+            _find_by_label(app.selectbox, "专业课").set_value("408综合").run()
+            _find_by_label(app.radio, "专业课功能").set_value("复习挑战").run()
+            if app.exception:
+                raise AssertionError(app.exception)
+            _find_by_label(app.text_area, "复练回答").set_value(
+                "先反复选择入度为 0 的顶点输出，输出完成说明不存在环。"
+            ).run()
+            _find_by_label(app.button, "提交复练并记录").click().run()
+            if app.exception:
+                raise AssertionError(app.exception)
+        finally:
+            self.knowledge_base._grade_professional_answer = original_grade
+
+        self.assertEqual(calls, [True])
+
     def test_configured_subject_can_be_removed_after_confirmation(self):
         app = self._run_app()
         subject_selector = _find_by_label(app.selectbox, "专业课")
         self.assertIn("408综合", subject_selector.options)
-        self.assertIn("医学考研", subject_selector.options)
+        self.assertNotIn("医学考研", subject_selector.options)
 
         _find_by_label(app.button, "删除专业课").click().run()
         if app.exception:
@@ -960,7 +1265,6 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         if app.exception:
             raise AssertionError(app.exception)
 
-        self.assertNotIn("408综合", _find_by_label(app.selectbox, "专业课").options)
         disabled_profile = self.catalog.get_rag_knowledge_base_by_subject("408综合")
         self.assertIsNotNone(disabled_profile)
         self.assertFalse(disabled_profile.enabled)
@@ -994,6 +1298,145 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(material[0], "目标院校408考纲.txt")
         self.assertEqual(material[1], "pending")
+
+    def test_personal_material_upload_is_indexed_and_visible_in_advanced_management(self):
+        started_jobs = []
+        original_start = self.knowledge_base._start_workbench_upload_background
+        original_extract = self.knowledge_base.extract_knowledge_points_as_drafts
+
+        class FakeUpload:
+            name = "个人复习笔记.txt"
+
+            def getvalue(self):
+                return (
+                    "拓扑排序用于有向无环图。每次选择入度为零的顶点输出，"
+                    "并删除该顶点及其出边；若最终输出顶点数少于图中顶点数，则图中存在环。"
+                ).encode("utf-8")
+
+        from schemas.knowledge_schema import KnowledgePointDraft
+
+        self.knowledge_base._start_workbench_upload_background = started_jobs.append
+        self.knowledge_base.extract_knowledge_points_as_drafts = (
+            lambda **kwargs: (
+                [
+                    KnowledgePointDraft(
+                        knowledge_name="拓扑排序判环",
+                        knowledge_type="个人资料知识点",
+                        subject="408综合",
+                        chapter_name="个人复习笔记",
+                        core_definition="反复输出入度为零的顶点；若不能输出全部顶点，则有向图存在环。",
+                        keywords=["拓扑排序", "入度", "有向无环图"],
+                        source_text=kwargs["text"],
+                    )
+                ],
+                [],
+            )
+        )
+        try:
+            queued, warnings = self.knowledge_base._queue_workbench_uploads(
+                1,
+                "408综合",
+                [FakeUpload()],
+            )
+            self.assertEqual(queued, 1)
+            self.assertEqual(warnings, [])
+            self.assertEqual(len(started_jobs), 1)
+            self.knowledge_base._process_workbench_upload_job(started_jobs[0])
+        finally:
+            self.knowledge_base._start_workbench_upload_background = original_start
+            self.knowledge_base.extract_knowledge_points_as_drafts = original_extract
+
+        with sqlite3.connect(self.db_path) as conn:
+            source_state = conn.execute(
+                """SELECT processing_status, knowledge_count
+                   FROM user_materials WHERE filename=?""",
+                ("个人复习笔记.txt",),
+            ).fetchone()
+            knowledge_row = conn.execute(
+                """SELECT knowledge_name, material_filename
+                   FROM user_knowledge WHERE knowledge_name=?""",
+                ("拓扑排序判环",),
+            ).fetchone()
+        self.assertEqual(source_state, ("done", 1))
+        self.assertEqual(knowledge_row, ("拓扑排序判环", "个人复习笔记.txt"))
+
+        app = self._run_app()
+        _find_by_label(app.text_input, "搜索知识库").set_value("拓扑排序判环").run()
+        if app.exception:
+            raise AssertionError(app.exception)
+        self.assertTrue(self._markdown_contains(app, "拓扑排序判环"))
+        self.assertTrue(self._markdown_contains(app, "来自个人资料"))
+
+        app.run()
+        if app.exception:
+            raise AssertionError(app.exception)
+        self.assertTrue(self._markdown_contains(app, "拓扑排序判环"))
+
+        _find_by_label(app.radio, "专业课功能").set_value("高级知识条目管理").run()
+        if app.exception:
+            raise AssertionError(app.exception)
+        self.assertTrue(self._markdown_contains(app, "拓扑排序判环"))
+
+    def test_docx_personal_material_reaches_the_same_knowledge_indexing_pipeline(self):
+        started_jobs = []
+        original_start = self.knowledge_base._start_workbench_upload_background
+        original_extract = self.knowledge_base.extract_knowledge_points_as_drafts
+        buffer = BytesIO()
+        document = Document()
+        document.add_heading("中国近现代史", level=1)
+        document.add_paragraph("洋务运动以自强、求富为口号，兴办近代军事工业和民用工业。")
+        document.save(buffer)
+
+        class FakeUpload:
+            name = "中国近现代史.docx"
+
+            def getvalue(self):
+                return buffer.getvalue()
+
+        from schemas.knowledge_schema import KnowledgePointDraft
+
+        self.knowledge_base._start_workbench_upload_background = started_jobs.append
+        self.knowledge_base.extract_knowledge_points_as_drafts = (
+            lambda **kwargs: (
+                [
+                    KnowledgePointDraft(
+                        knowledge_name="洋务运动",
+                        knowledge_type="个人资料知识点",
+                        subject="历史学统考",
+                        chapter_name="中国近现代史",
+                        core_definition="洋务派以自强、求富为口号推进近代化实践。",
+                        keywords=["洋务运动", "自强", "求富"],
+                        source_text=kwargs["text"],
+                    )
+                ],
+                [],
+            )
+        )
+        try:
+            queued, warnings = self.knowledge_base._queue_workbench_uploads(
+                1,
+                "历史学统考",
+                [FakeUpload()],
+            )
+            self.assertEqual((queued, warnings), (1, []))
+            self.knowledge_base._process_workbench_upload_job(started_jobs[0])
+        finally:
+            self.knowledge_base._start_workbench_upload_background = original_start
+            self.knowledge_base.extract_knowledge_points_as_drafts = original_extract
+
+        with sqlite3.connect(self.db_path) as conn:
+            source_state = conn.execute(
+                """SELECT source_type, process_method, processing_status, knowledge_count
+                   FROM user_materials WHERE filename=?""",
+                ("中国近现代史.docx",),
+            ).fetchone()
+            knowledge_row = conn.execute(
+                """SELECT knowledge_name, material_filename
+                   FROM user_knowledge WHERE knowledge_name=?""",
+                ("洋务运动",),
+            ).fetchone()
+        self.assertEqual(source_state, ("docx", "docx_text_extract", "done", 1))
+        self.assertEqual(knowledge_row, ("洋务运动", "中国近现代史.docx"))
 
     def test_workbench_reprocess_is_queued_without_blocking_page(self):
         started_jobs = []
@@ -1040,6 +1483,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             self.knowledge_base._start_workbench_upload_background = original_start
 
         self.assertEqual(job["material_id"], material["id"])
+        self.assertTrue(job["replace_existing"])
         self.assertEqual(len(started_jobs), 1)
         with sqlite3.connect(self.db_path) as conn:
             status = conn.execute(
@@ -1051,11 +1495,19 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
                 (material["id"],),
             ).fetchone()[0]
         self.assertEqual(status, "pending")
-        self.assertEqual(remaining_knowledge, 0)
+        self.assertEqual(remaining_knowledge, 1)
+
+    def test_wrongbook_html_never_receives_service_api_key(self):
+        app_source = (PROJECT_DIR / "app.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("WB_API_KEY", app_source)
+        self.assertNotIn("_start_wb_save_server", app_source)
 
     def test_page_exposes_dedicated_syllabus_reader(self):
         app = self._run_app()
 
+        self.assertIn("docx", self.knowledge_base.SUPPORTED_SYLLABUS_FILE_TYPES)
+        self.assertIn("docx", self.knowledge_base.SUPPORTED_MATERIAL_FILE_TYPES)
         source_mode = _find_by_label(app.radio, "添加方式")
         self.assertEqual(source_mode.value, "读取大纲")
         self.assertTrue(any(item.label == "上传考试大纲" for item in app.get("file_uploader")))
@@ -1063,6 +1515,14 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertTrue(
             any(item.label == "读取大纲并生成背诵内容" for item in app.button)
         )
+
+        source_mode.set_value("添加资料").run()
+        if app.exception:
+            raise AssertionError(app.exception)
+        self.assertTrue(any(item.label == "上传资料" for item in app.get("file_uploader")))
+        self.assertTrue(any(item.label == "添加来源" for item in app.button))
+        self.assertFalse(any(item.label == "本地资料文件夹" for item in app.text_input))
+        self.assertFalse(any(item.label == "本机资料文件夹" for item in app.text_input))
 
     def test_syllabus_upload_uses_dedicated_background_worker(self):
         started_jobs = []

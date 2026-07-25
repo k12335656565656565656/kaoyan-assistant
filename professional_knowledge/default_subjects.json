@@ -14,13 +14,7 @@
         "notes": "当前主通道。后续优先接入 source_chunks、混合检索与关系图谱。",
         "enabled": true
       },
-      "local_source": {
-        "key": "exam_408",
-        "title": "本地 408 资料",
-        "tab_label": "本地 408 资料",
-        "root_env_var": "CSKAOYAN_ROOT",
-        "fallback_dir_name": "cskaoyan-master"
-      },
+      "local_source": null,
       "max_points": 12,
       "exam_subjects": ["数据结构", "计算机组成原理", "操作系统", "计算机网络"],
       "extraction_guidance": "优先识别数据结构、计算机组成原理、操作系统和计算机网络中的概念、算法、机制与易错点；每条知识点保留可核对的原文依据。"
@@ -66,21 +60,15 @@
       "catalog": {
         "title": "医学考研",
         "subject_label": "医学考研",
-        "status": "已启用",
+        "status": "已隐藏",
         "stage": "MVP",
         "summary": "支持 PDF/OCR、知识点抽取、原文引用、复习内容与后续 RAG 扩展。",
         "capabilities": ["知识点抽取", "原文引用", "复习内容", "后续关系图"],
         "source_strategy": "PaddleOCR + PDF 文本提取 + 结构化知识点确认",
-        "notes": "复用 408 同款识别与确认链路，本地资料可放在 Medical Postgraduate Entrance Examination 目录。",
-        "enabled": true
+        "notes": "复用 408 同款识别与确认链路。默认隐藏，后续需要医学模块时再启用。",
+        "enabled": false
       },
-      "local_source": {
-        "key": "medical_postgraduate",
-        "title": "本地医学考研资料",
-        "tab_label": "本地医学考研资料",
-        "root_env_var": "MEDICAL_POSTGRADUATE_ROOT",
-        "fallback_dir_name": "Medical Postgraduate Entrance Examination"
-      },
+      "local_source": null,
       "max_points": 12,
       "exam_subjects": ["生理学", "生物化学", "病理学", "内科学", "外科学"],
       "extraction_guidance": "优先抽取定义、病理生理机制、诊断依据、鉴别要点、治疗原则和易混淆内容；仅保留资料中有依据的结论。"

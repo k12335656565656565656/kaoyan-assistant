@@ -136,7 +136,18 @@ class RepositoryFlowTests(unittest.TestCase):
         self.conn.commit()
 
         knowledge_id = self.conn.execute("SELECT id FROM user_knowledge LIMIT 1").fetchone()[0]
-        update_knowledge_review_content(self.conn, knowledge_id, "复习卡片：Q 队列是什么？A 先进先出。")
+        update_knowledge_review_content(
+            self.conn,
+            7,
+            knowledge_id,
+            "不应写入",
+        )
+        update_knowledge_review_content(
+            self.conn,
+            1,
+            knowledge_id,
+            "复习卡片：Q 队列是什么？A 先进先出。",
+        )
         self.conn.commit()
 
         row = self.conn.execute(

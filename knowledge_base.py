@@ -1,6 +1,6 @@
 """
 专业知识库模块 — 独立包
-功能：上传资料 · OCR识别 · 错题本 · 复习本 · AI出题
+功能：考纲解析 · 个人资料整理 · 背诵知识库 · 错题本 · 复习本 · AI出题
 """
 
 import streamlit as st
@@ -78,16 +78,11 @@ from services.adaptive_ocr_service import (
 )
 from services.pdf_outline_service import extract_pdf_outline_adaptively
 from services.llm_gateway import simple_prompt_completion
+from services import professional_question_prompts as question_prompts
+from services import professional_question_validator as question_validator
 from services.professional_syllabus_analysis_service import run_syllabus_analysis_job
 from services.web_supplement_service import build_web_supplement_prompt, search_web
 from services.knowledge_json_extractor import extract_knowledge_points_as_drafts
-from services.local_material_source_service import (
-    get_local_material_root,
-    get_local_material_source_for_subject,
-    get_local_material_source_hint,
-    list_local_material_files,
-    read_local_material,
-)
 from services.material_router import route_material_input
 from services.chat_answer_pdf_service import (
     build_chat_answer_pdf,
@@ -109,6 +104,8 @@ _CHAT_JOBS = {}
 # ==================== 配置（从环境变量读取） ====================
 MEMORY_DB = os.environ.get("MEMORY_DB", "data/memory.db")
 API_KEY = os.environ.get("AI_API_KEY", "")
+SUPPORTED_MATERIAL_FILE_TYPES = ("pdf", "docx", "png", "jpg", "jpeg", "txt", "md")
+SUPPORTED_SYLLABUS_FILE_TYPES = ("pdf", "docx", "txt", "md")
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1")
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
 
@@ -187,14 +184,14 @@ def ensure_db():
 
 # ==================== LLM 辅助 ====================
 
-def _call_llm_api(prompt, model=None, max_tokens=1500, temperature=0.3):
+def _call_llm_api(prompt, model=None, max_tokens=1500, temperature=0.3, timeout=240, retries=1):
     return simple_prompt_completion(
         prompt,
         model=model,
         max_tokens=max_tokens,
         temperature=temperature,
-        timeout=240,
-        retries=1,
+        timeout=timeout,
+        retries=retries,
     )
 
 
@@ -399,8 +396,12 @@ def save_knowledge_points(user_id, material_id, subject, chapter_name, llm_resul
             VALUES (?, ?, ?, ?, ?, ?)""",
             (user_id, material_id, subject, chapter_name, name_kb, llm_result))
         count += 1
-    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=?",
-             (count, material_id))
+    c.execute(
+        """UPDATE user_materials
+           SET processing_status='done', knowledge_count=?
+           WHERE id=? AND user_id=?""",
+        (count, material_id, user_id),
+    )
     conn.commit()
     conn.close()
     return count
@@ -734,6 +735,7 @@ def _persist_active_workflow_snapshot(status="drafted"):
             conn,
             material_id,
             snapshot,
+            user_id=st.session_state.get("user_id", 1),
             status=status,
         )
         conn.commit()
@@ -752,7 +754,13 @@ def _persist_active_confirmed_text(text, status="text_confirmed"):
         return False
     conn = sqlite3.connect(MEMORY_DB)
     try:
-        save_confirmed_text(conn, material_id, text, status=status)
+        save_confirmed_text(
+            conn,
+            material_id,
+            text,
+            user_id=st.session_state.get("user_id", 1),
+            status=status,
+        )
         conn.commit()
         return True
     except Exception as exc:
@@ -885,6 +893,8 @@ def _render_material_report(material_result):
         badges.append(("OCR 回退", "warn"))
     elif process_method == "image_ocr":
         badges.append(("图片 OCR", "warn"))
+    elif process_method == "docx_text_extract":
+        badges.append(("Word 结构化提取", "good"))
     else:
         badges.append((process_method, ""))
     badges.append((f"置信度 {confidence:.2f}", ""))
@@ -1257,7 +1267,11 @@ def _render_knowledge_page_legacy():
         # 上传表单
         with st.form("upload_material"):
             chapter_name = st.text_input("章节名称", placeholder="例如：第一章 栈和队列")
-            uploaded_file = st.file_uploader("上传资料", type=["pdf", "png", "jpg", "jpeg", "txt"], key="material_upload")
+            uploaded_file = st.file_uploader(
+                "上传资料",
+                type=SUPPORTED_MATERIAL_FILE_TYPES,
+                key="material_upload",
+            )
             pasted_text = st.text_area("或直接粘贴资料文本", height=180, placeholder="将课程讲义、笔记或整理后的原文粘贴到这里")
             if st.form_submit_button("上传并处理", use_container_width=True):
                 if uploaded_file and pasted_text.strip():
@@ -1296,8 +1310,10 @@ def _render_knowledge_page_legacy():
                         spinner_text = "正在解析 PDF，并按需回退 OCR..."
                     elif file_type in ("png", "jpg", "jpeg"):
                         spinner_text = "正在识别图片..."
-                    elif file_type == "txt":
-                        spinner_text = "正在整理 TXT 文本..."
+                    elif file_type == "docx":
+                        spinner_text = "正在读取 Word 文档..."
+                    elif file_type in ("txt", "md"):
+                        spinner_text = "正在整理文本..."
 
                     with st.spinner(spinner_text):
                         material_result = route_material_input(
@@ -1857,6 +1873,7 @@ def _render_confirmed_panel(user_id, selected_subject, chapter_name, material_id
                         conn,
                         material_id,
                         snapshot,
+                        user_id=user_id,
                         status="done" if workflow_complete else "drafted",
                     )
                 conn.commit()
@@ -1925,9 +1942,9 @@ def _render_private_repository(user_id, subject=None, show_study_tools=True, inc
 
     if not points:
         empty_text = (
-            "这里暂时没有来自上传资料的知识条目。下方 408 内置学习库可以直接学习；上传自己学校的考纲或课程资料后，整理出的条目会出现在这里。"
+            "这里暂时没有来自个人资料的知识条目。下方 408 内置学习库可以直接学习；上传自己学校的考纲或复习资料后，整理出的条目会出现在这里。"
             if is_408_subject(subject)
-            else "当前专业课的知识库为空。上传资料后，系统会自动整理专业知识、心得、经验和方法策略。"
+            else "当前专业课的知识库为空。上传考试大纲或个人复习资料后，系统会自动整理知识条目。"
         )
         st.markdown(
             f"""
@@ -2129,7 +2146,12 @@ def _save_review_expansion(knowledge_id, expansion):
         return
     conn = sqlite3.connect(MEMORY_DB)
     try:
-        update_knowledge_review_content(conn, knowledge_id, expansion)
+        update_knowledge_review_content(
+            conn,
+            st.session_state.get("user_id", 1),
+            knowledge_id,
+            expansion,
+        )
         conn.commit()
     finally:
         conn.close()
@@ -2162,18 +2184,23 @@ def _discard_material_if_unsaved(material_id):
         return
     conn = sqlite3.connect(MEMORY_DB)
     try:
+        user_id = st.session_state.get("user_id", 1)
         row = conn.execute(
             """SELECT id, file_path FROM user_materials
-               WHERE id=? AND COALESCE(knowledge_count, 0)=0
+               WHERE id=? AND user_id=? AND COALESCE(knowledge_count, 0)=0
                  AND NOT EXISTS (
                      SELECT 1 FROM user_knowledge
                      WHERE user_knowledge.material_id=user_materials.id
+                       AND user_knowledge.user_id=user_materials.user_id
                  )""",
-            (material_id,),
+            (material_id, user_id),
         ).fetchone()
         if row:
             _remove_local_material_file(row[1])
-            conn.execute("DELETE FROM user_materials WHERE id=?", (material_id,))
+            conn.execute(
+                "DELETE FROM user_materials WHERE id=? AND user_id=?",
+                (material_id, user_id),
+            )
             conn.commit()
     finally:
         conn.close()
@@ -2241,6 +2268,28 @@ def _clear_active_material_state(*, discard_unsaved=False):
         _discard_material_if_unsaved(st.session_state.get("_ocr_material_id"))
     for key in _ACTIVE_MATERIAL_STATE_KEYS:
         st.session_state.pop(key, None)
+
+
+def clear_professional_session_state():
+    """Remove user-scoped professional-course UI state during logout."""
+
+    exact_keys = {
+        *_ACTIVE_MATERIAL_STATE_KEYS,
+        "knowledge_drafts",
+        "confirmed_knowledge_drafts",
+        "selected_draft_id",
+        "deleted_knowledge_draft_count",
+        "knowledge_draft_warnings",
+        "persisted_knowledge_count",
+        "last_persisted_knowledge_names",
+        "persisted_confirmed_knowledge_ids",
+        "_pending_kb_subject",
+        "_pending_delete_subject_key",
+    }
+    prefixes = ("pk_", "_pk_", "workbench_", "professional_")
+    for key in list(st.session_state.keys()):
+        if key in exact_keys or key.startswith(prefixes):
+            st.session_state.pop(key, None)
 
 
 def _set_active_material_state(*, material_id, chapter_name, subject, file_type, filename, material_result):
@@ -2325,6 +2374,8 @@ def _process_material_submission(
     status_label = "正在识别资料..."
     if file_type == "pdf":
         status_label = "正在检查 PDF 结构..."
+    elif file_type == "docx":
+        status_label = "正在读取 Word 文档..."
     elif file_type in {"png", "jpg", "jpeg"}:
         status_label = "正在识别图片文字..."
     elif pasted_text.strip():
@@ -2362,10 +2413,19 @@ def _process_material_submission(
                 pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()) if file_type == "pdf" else False,
                 pdf_text_progress_fn=update_pdf_text_progress if file_type == "pdf" else None,
             )
+            if not str(material_result.extracted_text or "").strip():
+                reason = "；".join(material_result.warnings or []) or "没有提取到可用文字"
+                raise ValueError(reason)
     except Exception as exc:
         conn = sqlite3.connect(MEMORY_DB)
         try:
-            mark_material_status(conn, material_id, "failed", error_message=str(exc))
+            mark_material_status(
+                conn,
+                material_id,
+                "failed",
+                user_id=user_id,
+                error_message=str(exc),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -2393,6 +2453,7 @@ def _process_material_submission(
             conn,
             material_id,
             material_result,
+            user_id=user_id,
             status="extracted",
             content_hash=source_hash,
         )
@@ -2400,7 +2461,13 @@ def _process_material_submission(
     except Exception as exc:
         conn.rollback()
         try:
-            mark_material_status(conn, material_id, "failed", error_message=str(exc))
+            mark_material_status(
+                conn,
+                material_id,
+                "failed",
+                user_id=user_id,
+                error_message=str(exc),
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -2513,30 +2580,12 @@ def _process_material_batch_uploads(*, user_id, subject, chapter_name, uploaded_
         st.rerun()
 
 
-def _format_file_size(size_bytes):
-    value = float(size_bytes or 0)
-    for unit in ("B", "KB", "MB", "GB"):
-        if value < 1024 or unit == "GB":
-            return f"{value:.0f}{unit}" if unit == "B" else f"{value:.1f}{unit}"
-        value /= 1024
-    return f"{value:.1f}GB"
-
-
-def _format_local_material_option(item):
-    return f"{item['relative_path']} · {_format_file_size(item.get('size_bytes', 0))}"
-
-
-def _guess_chapter_name_from_relative_path(relative_path):
-    path = Path(relative_path or "")
-    if not relative_path:
-        return ""
-    if len(path.parts) >= 2:
-        return f"{path.parts[-2]} - {path.stem}"
-    return path.stem
-
-
 def _render_rag_knowledge_base_catalog():
-    items = list_rag_knowledge_bases()
+    items = [
+        item
+        for item in list_rag_knowledge_bases()
+        if item.enabled
+    ]
     if not items:
         return
 
@@ -2562,11 +2611,17 @@ def _render_rag_knowledge_base_catalog():
             )
         )
 
+    enabled_labels = [
+        item.title
+        for item in items
+        if item.enabled
+    ]
+    enabled_summary = "、".join(enabled_labels) if enabled_labels else "暂无固定知识库"
     st.markdown(
         (
             '<div class="pk-section-heading">'
             "<h2>专业课 RAG 知识库</h2>"
-            "<p>当前已启用 408 与医学考研，后续小众专业课按统一框架继续扩展。</p>"
+            f"<p>当前已启用 {_escape_html(enabled_summary)}；后续专业课按统一框架继续扩展。</p>"
             "</div>"
             '<div class="kb-catalog">'
             f'<div class="kb-catalog-grid">{"".join(card_html)}</div>'
@@ -2618,7 +2673,7 @@ def _render_subject_setup_wizard(form_key="create_custom_subject_v1", *, wrap_ex
             height=90,
             key=f"{form_key}_extraction_guidance",
         )
-        submitted = st.button("创建并开始导入资料", key=f"{form_key}_submit", use_container_width=True, type="primary")
+        submitted = st.button("创建专业课", key=f"{form_key}_submit", use_container_width=True, type="primary")
 
         if not submitted:
             return
@@ -2654,7 +2709,7 @@ def _render_subject_setup_wizard(form_key="create_custom_subject_v1", *, wrap_ex
                         "subject_label": clean_label,
                         "status": "已启用",
                         "stage": "自定义",
-                        "summary": f"{clean_label}的资料识别、人工确认与私有知识库工作流。",
+                        "summary": f"{clean_label}的考纲解析、个人资料整理、知识库与复习工作流。",
                         "capabilities": ["资料导入", "知识点确认", "原文引用"],
                         "source_strategy": "统一资料路由 + 结构化知识点确认",
                         "notes": "由页面向导创建，可继续通过配置文件调整抽取重点。",
@@ -2674,7 +2729,7 @@ def _render_subject_setup_wizard(form_key="create_custom_subject_v1", *, wrap_ex
             return
 
         st.session_state["_pending_kb_subject"] = clean_label
-        _queue_toast(f"已创建“{clean_label}”，现在可以导入资料")
+        _queue_toast(f"已创建“{clean_label}”，现在可以上传考纲或个人资料")
         st.rerun()
 
 
@@ -2684,7 +2739,16 @@ def _update_knowledge_mastery(knowledge_id, mastery_state):
     conn = sqlite3.connect(MEMORY_DB)
     try:
         ensure_knowledge_schema(conn)
-        conn.execute("UPDATE user_knowledge SET mastery_state=?, updated_at=datetime('now') WHERE id=?", (mastery_state, knowledge_id))
+        conn.execute(
+            """UPDATE user_knowledge
+               SET mastery_state=?, updated_at=datetime('now')
+               WHERE id=? AND user_id=?""",
+            (
+                mastery_state,
+                knowledge_id,
+                st.session_state.get("user_id", 1),
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -2741,27 +2805,25 @@ def _render_legacy_knowledge_page(*, show_header=True, show_subject_setup=True):
         if pending_subject in subjects_kb:
             st.session_state["kb_subject_v2"] = pending_subject
         selected_subject = st.selectbox("学科", subjects_kb, key="kb_subject_v2")
-        local_material_source = get_local_material_source_for_subject(selected_subject)
-        local_tab_label = local_material_source.tab_label if local_material_source else "本地资料源"
         intro_left, intro_right = st.columns([1.4, 0.9])
         with intro_left:
             st.subheader("导入待识别资料")
             st.caption("先确认原始文本，再抽取候选知识点。所有来源最终都会走同一条清洗、抽取、确认、入库链路。")
-            upload_tab, paste_tab, local_tab = st.tabs(["上传资料", "粘贴文本", local_tab_label])
+            upload_tab, paste_tab = st.tabs(["上传资料", "粘贴文本"])
 
             with upload_tab:
                 with st.form("upload_material_v2"):
                     upload_chapter_name = st.text_input("章节 / 文件主题", placeholder="例如：数据结构 - 树与二叉树；多文件时将作为批次前缀")
                     uploaded_files = st.file_uploader(
-                        "上传 PDF / 图片 / TXT（支持多文件）",
-                        type=["pdf", "png", "jpg", "jpeg", "txt"],
+                        "上传 PDF / DOCX / 图片 / TXT / MD（支持多文件）",
+                        type=SUPPORTED_MATERIAL_FILE_TYPES,
                         key="material_upload_v2",
                         accept_multiple_files=True,
                     )
                     upload_submitted = st.form_submit_button("开始识别", use_container_width=True, type="primary")
                 if upload_submitted:
                     if not uploaded_files:
-                        st.warning("请上传 PDF / 图片 / TXT 文件。")
+                        st.warning("请上传 PDF、DOCX、图片、TXT 或 MD 文件。")
                     else:
                         _process_material_batch_uploads(
                             user_id=user_id,
@@ -2789,75 +2851,10 @@ def _render_legacy_knowledge_page(*, show_header=True, show_subject_setup=True):
                             pasted_text=pasted_text,
                         )
 
-            with local_tab:
-                if local_material_source is None:
-                    st.info("当前学科暂未配置本地资料源。你仍然可以通过上传 PDF / 图片 / TXT 或粘贴文本使用专业课识别系统。")
-                else:
-                    local_root = get_local_material_root(local_material_source.key)
-                    if local_root is None:
-                        st.info(
-                            f"未配置 {local_material_source.title} 目录。"
-                            f" 可通过 {get_local_material_source_hint(local_material_source.key)} 提供资料。"
-                        )
-                        local_files = []
-                    else:
-                        local_files = list_local_material_files(local_material_source.key, limit=300)
-                    if not local_files:
-                        if local_root is not None:
-                            st.info(f"已配置 {local_material_source.title} 目录，但当前没有读取到可导入的 PDF / 图片 / TXT / MD 文件。")
-                    else:
-                        local_query = st.text_input(
-                            "搜索本地资料",
-                            placeholder="按文件名或相对路径筛选",
-                            key=f"local_material_search_{local_material_source.key}_v2",
-                        )
-                        filtered_files = [
-                            item for item in local_files
-                            if not local_query.strip()
-                            or local_query.lower() in item["name"].lower()
-                            or local_query.lower() in item["relative_path"].lower()
-                        ]
-                        st.caption(f"资料根目录：{local_root}")
-                        if not filtered_files:
-                            st.warning("没有匹配的本地资料文件。")
-                        else:
-                            local_file_map = {item["relative_path"]: item for item in filtered_files}
-                            selected_relative_path = st.selectbox(
-                                "选择本地资料",
-                                options=list(local_file_map.keys()),
-                                format_func=lambda key: _format_local_material_option(local_file_map[key]),
-                                key=f"local_material_selected_{local_material_source.key}_v2",
-                            )
-                            local_chapter_name = st.text_input(
-                                "章节 / 文件主题",
-                                value=_guess_chapter_name_from_relative_path(selected_relative_path),
-                                key=f"local_material_chapter_{local_material_source.key}_v2",
-                            )
-                            if st.button(
-                                "导入并识别",
-                                use_container_width=True,
-                                type="primary",
-                                key=f"import_local_material_{local_material_source.key}_v2",
-                            ):
-                                if not local_chapter_name.strip():
-                                    st.warning("请填写章节或文件主题。")
-                                else:
-                                    try:
-                                        filename, file_bytes = read_local_material(local_material_source.key, selected_relative_path)
-                                        _process_material_submission(
-                                            user_id=user_id,
-                                            subject=selected_subject,
-                                            chapter_name=local_chapter_name,
-                                            filename=filename,
-                                            file_bytes=file_bytes,
-                                        )
-                                    except Exception as exc:
-                                        st.error(f"导入 {local_material_source.title} 失败：{exc}")
-
         with intro_right:
             _render_info_card(
                 "当前导入策略",
-                "文字型 PDF 先走 PyMuPDF 直提，质量不足时自动尝试 OCR 回退；图片走 OCR，TXT / MD / 粘贴文本直接清洗后进入人工确认。",
+                "文字型 PDF 先走 PyMuPDF 直提，质量不足时自动尝试 OCR 回退；DOCX 提取标题、段落和表格；图片走 OCR，TXT / MD / 粘贴文本直接清洗后进入人工确认。",
                 metrics=[
                     ("默认学科", selected_subject),
                     ("OCR 引擎", "RapidOCR + PaddleOCR"),
@@ -3254,7 +3251,7 @@ def _inject_professional_workbench_styles():
             font-size: 0 !important;
         }
         .st-key-workbench_source_files_v1 [data-testid="stFileUploaderDropzoneInstructions"] small::after {
-            content: "单个文件最大 200MB · PDF, PNG, JPG, JPEG, TXT, MD";
+            content: "单个文件最大 200MB · PDF, DOCX, PNG, JPG, JPEG, TXT, MD";
             font-size: .75rem !important;
             color: #667085;
         }
@@ -3376,6 +3373,15 @@ def _list_subject_sources(user_id, subject):
         conn.close()
 
 
+def _build_web_supplement_query(point):
+    point_name = str(point.get("knowledge_name") or "").strip()
+    point_subject = str(point.get("subject") or "").strip()
+    subject_area = str(point.get("subject_area") or "").strip()
+    if is_408_subject(point_subject):
+        return f"408 {subject_area} {point_name} 考研 知识点".strip()
+    return f"{point_subject} {subject_area} {point_name} 考研 知识点".strip()
+
+
 def _render_repository_ai_tools(point):
     """Render visible per-item AI expansion controls with preview-before-save."""
     knowledge_id = point.get("id")
@@ -3400,7 +3406,7 @@ def _render_repository_ai_tools(point):
     with web_col:
         if st.button("联网补充", key=f"web_expand_{knowledge_id}", use_container_width=True):
             try:
-                query = f"{point.get('knowledge_name') or ''} 考研 408 知识点"
+                query = _build_web_supplement_query(point)
                 results = search_web(query, limit=5)
                 if not results:
                     st.session_state[web_key] = {
@@ -3567,7 +3573,13 @@ def _auto_index_material(user_id, result, *, replace_existing=False):
                 "DELETE FROM user_knowledge WHERE user_id=? AND material_id=?",
                 (user_id, material_id),
             )
-        save_confirmed_text(conn, material_id, text, status="text_confirmed")
+        save_confirmed_text(
+            conn,
+            material_id,
+            text,
+            user_id=user_id,
+            status="text_confirmed",
+        )
         saved_count = save_confirmed_knowledge_points(
             conn,
             user_id,
@@ -3588,6 +3600,7 @@ def _auto_index_material(user_id, result, *, replace_existing=False):
             conn,
             material_id,
             {"auto_indexed": True, "warnings": warnings, "knowledge_count": saved_count},
+            user_id=user_id,
             status="done" if point_dicts else "text_confirmed",
         )
         conn.commit()
@@ -3622,6 +3635,7 @@ def _reprocess_subject_source(user_id, source):
             conn,
             source["id"],
             material_result,
+            user_id=user_id,
             status="extracted",
         )
         conn.commit()
@@ -3644,7 +3658,7 @@ def _reprocess_subject_source(user_id, source):
     if not saved_count:
         conn = sqlite3.connect(MEMORY_DB)
         try:
-            mark_material_status(conn, source["id"], "done")
+            mark_material_status(conn, source["id"], "done", user_id=user_id)
             conn.commit()
         finally:
             conn.close()
@@ -3738,7 +3752,12 @@ def _process_workbench_upload_job(job):
 
     conn = sqlite3.connect(MEMORY_DB)
     try:
-        mark_material_status(conn, material_id, "processing")
+        mark_material_status(
+            conn,
+            material_id,
+            "processing",
+            user_id=job.get("user_id"),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -3769,6 +3788,9 @@ def _process_workbench_upload_job(job):
             pdf_ocr_available=(is_rapid_ocr_available() or is_paddle_ocr_available()) if file_type == "pdf" else False,
             pdf_text_progress_fn=progress_callback if file_type == "pdf" else None,
         )
+        if not str(material_result.extracted_text or "").strip():
+            reason = "；".join(material_result.warnings or []) or "没有提取到可用文字"
+            raise ValueError(reason)
         if file_type in {"png", "jpg", "jpeg"} and not (is_rapid_ocr_available() or is_paddle_ocr_available()):
             message = "OCR 服务不可用。文字型 PDF 仍可直接提取；扫描型 PDF 或图片可能无法识别。"
             if message not in material_result.warnings:
@@ -3780,6 +3802,7 @@ def _process_workbench_upload_job(job):
                 conn,
                 material_id,
                 material_result,
+                user_id=job.get("user_id"),
                 status="extracted",
                 content_hash=source_hash,
             )
@@ -3804,7 +3827,11 @@ def _process_workbench_upload_job(job):
             "task_id": task_id,
             "material_result": material_result,
         }
-        saved_count, warnings = _auto_index_material(job.get("user_id"), result)
+        saved_count, warnings = _auto_index_material(
+            job.get("user_id"),
+            result,
+            replace_existing=bool(job.get("replace_existing")),
+        )
         update_professional_task_status(
             task_id,
             "done",
@@ -3816,7 +3843,13 @@ def _process_workbench_upload_job(job):
     except Exception as exc:
         conn = sqlite3.connect(MEMORY_DB)
         try:
-            mark_material_status(conn, material_id, "failed", error_message=str(exc))
+            mark_material_status(
+                conn,
+                material_id,
+                "failed",
+                user_id=job.get("user_id"),
+                error_message=str(exc),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -3843,11 +3876,7 @@ def _create_workbench_reprocess_job(user_id, source):
     )
     conn = sqlite3.connect(MEMORY_DB)
     try:
-        conn.execute(
-            "DELETE FROM user_knowledge WHERE user_id=? AND material_id=?",
-            (user_id, source["id"]),
-        )
-        mark_material_status(conn, source["id"], "pending")
+        mark_material_status(conn, source["id"], "pending", user_id=user_id)
         conn.commit()
     finally:
         conn.close()
@@ -3861,6 +3890,7 @@ def _create_workbench_reprocess_job(user_id, source):
         "file_path": file_path,
         "file_type": file_type,
         "source_hash": source.get("content_hash") or "",
+        "replace_existing": True,
     }
 
 
@@ -3887,7 +3917,7 @@ def _process_syllabus_memorization_job(job):
 
     conn = sqlite3.connect(MEMORY_DB)
     try:
-        mark_material_status(conn, material_id, "processing")
+        mark_material_status(conn, material_id, "processing", user_id=user_id)
         conn.commit()
     finally:
         conn.close()
@@ -3928,6 +3958,7 @@ def _process_syllabus_memorization_job(job):
                 conn,
                 material_id,
                 material_result,
+                user_id=user_id,
                 status="extracted",
                 content_hash=source_hash,
             )
@@ -3968,7 +3999,13 @@ def _process_syllabus_memorization_job(job):
                 "DELETE FROM user_knowledge WHERE user_id=? AND material_id=?",
                 (user_id, material_id),
             )
-            save_confirmed_text(conn, material_id, syllabus_text, status="text_confirmed")
+            save_confirmed_text(
+                conn,
+                material_id,
+                syllabus_text,
+                user_id=user_id,
+                status="text_confirmed",
+            )
             saved_count = save_confirmed_knowledge_points(
                 conn,
                 user_id,
@@ -4001,6 +4038,7 @@ def _process_syllabus_memorization_job(job):
                     "knowledge_count": saved_count,
                     "warnings": warnings,
                 },
+                user_id=user_id,
                 status="done",
             )
             conn.commit()
@@ -4018,7 +4056,13 @@ def _process_syllabus_memorization_job(job):
     except Exception as exc:
         conn = sqlite3.connect(MEMORY_DB)
         try:
-            mark_material_status(conn, material_id, "failed", error_message=str(exc))
+            mark_material_status(
+                conn,
+                material_id,
+                "failed",
+                user_id=user_id,
+                error_message=str(exc),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -4190,7 +4234,7 @@ def _answer_builtin_408_question(user_id, subject, question, answer_mode="custom
         max_tokens = 3600
 
     prompt = f"""你是 408 计算机考研辅导老师。请优先依据下面的内置 408 知识库回答，不要编造院校、年份或教材页码。
-回答要求：直接讲结论；分点解释；必要时补易错提醒；如果知识库不足，明确说还需要结合教材或用户上传资料核对。
+回答要求：直接讲结论；分点解释；必要时补易错提醒；如果知识库不足，明确说还需要结合教材或学校考纲核对。
 {mode_guidance}
 
 用户问题：{question}
@@ -4199,9 +4243,12 @@ def _answer_builtin_408_question(user_id, subject, question, answer_mode="custom
 {chr(10).join(source_blocks)[:52000]}
 """
     try:
-        return _clean_assistant_answer(_call_llm_api(prompt, max_tokens=max_tokens))
+        answer = _clean_assistant_answer(_call_llm_api(prompt, max_tokens=max_tokens))
     except Exception as exc:
-        return f"{_format_llm_error(exc)} 408 内置知识库已经可在下方知识库里直接学习。"
+        raise RuntimeError(_format_llm_error(exc)) from exc
+    if not answer.strip():
+        raise RuntimeError("AI 暂时没有返回可用回答，请稍后重试。")
+    return answer
 
 
 def _answer_subject_question(user_id, subject, source_ids, question, answer_mode="custom"):
@@ -4304,9 +4351,12 @@ def _answer_subject_question(user_id, subject, source_ids, question, answer_mode
 {chr(10).join(source_blocks)[:source_limit]}
 """
     try:
-        return _clean_assistant_answer(_call_llm_api(prompt, max_tokens=max_tokens))
+        answer = _clean_assistant_answer(_call_llm_api(prompt, max_tokens=max_tokens))
     except Exception as exc:
-        return f"{_format_llm_error(exc)} 资料已经保存，你可以稍后重试。"
+        raise RuntimeError(_format_llm_error(exc)) from exc
+    if not answer.strip():
+        raise RuntimeError("AI 暂时没有返回可用回答，请稍后重试。")
+    return answer
 
 
 def _chat_cache_id(slot_key, prompt, source_signature):
@@ -4388,13 +4438,15 @@ def _sync_chat_answer_from_job(answer_cache, cache_id, job_id):
         return None
     if job.get("status") == "completed":
         answer_cache[cache_id] = {
+            "status": "completed",
             "prompt": job.get("prompt") or "",
             "answer": job.get("answer") or "回答为空，请稍后重试。",
         }
     elif job.get("status") == "failed":
         answer_cache[cache_id] = {
+            "status": "failed",
             "prompt": job.get("prompt") or "",
-            "answer": job.get("error") or "暂时无法生成回答，请稍后重试。",
+            "error": job.get("error") or "暂时无法生成回答，请稍后重试。",
         }
     return job
 
@@ -4546,8 +4598,66 @@ def _mastery_standard_for_point(point):
 
 
 def _exam_style_example_for_point(point):
-    generated = _fallback_professional_question(point, "application")
-    return str(generated.get("question") or "").strip()
+    return str(
+        point.get("exam_style_example")
+        or point.get("example_question")
+        or ""
+    ).strip()
+
+
+_CS_408_EXAM_SUBJECTS = ("数据结构", "计算机组成原理", "操作系统", "计算机网络")
+
+
+def _combined_point_text(point):
+    return question_prompts.combined_point_text(point)
+
+
+def _is_408_knowledge_point(point):
+    return question_prompts.is_408_knowledge_point(point)
+
+
+def _detect_408_exam_subject(point):
+    return question_prompts.detect_408_exam_subject(point)
+
+
+def _select_408_question_blueprints(point, mode, variant=1):
+    return question_prompts.select_408_question_blueprints(point, mode, variant=variant)
+
+
+def _format_408_blueprints(point, mode, variant=1):
+    return question_prompts.format_408_blueprints(point, mode, variant=variant)
+
+
+def _looks_like_408_exam_task(generated, mode, point=None):
+    return question_validator.looks_like_408_exam_task(generated, mode, point=point)
+
+
+def _choice_reference_has_conflict(generated):
+    return question_validator.choice_reference_has_conflict(generated)
+
+
+def _reference_has_internal_conflict(generated):
+    return question_validator.reference_has_internal_conflict(generated)
+
+
+def _blank_marker_count(question):
+    return question_validator.blank_marker_count(question)
+
+
+def _split_blank_answers(answer_text):
+    return question_validator.split_blank_answers(answer_text)
+
+
+def _normalize_answer_for_match(text):
+    return question_validator.normalize_answer_for_match(text)
+
+
+def _reference_asserts_blank_answer(reference, answer):
+    return question_validator.reference_asserts_blank_answer(reference, answer)
+
+
+def _blank_answers_are_supported_by_reference(generated):
+    return question_validator.blank_answers_are_supported_by_reference(generated)
 
 
 def _parse_llm_json(raw):
@@ -4602,6 +4712,18 @@ def _coerce_text_list(value):
     return []
 
 
+def _coerce_answer_text(value):
+    if isinstance(value, list):
+        return "；".join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, dict):
+        return "；".join(
+            f"{key}: {item}".strip()
+            for key, item in value.items()
+            if str(item).strip()
+        )
+    return str(value or "").strip()
+
+
 def _json_string_field(raw, field):
     match = re.search(
         rf'"{re.escape(field)}"\s*:\s*"((?:\\.|[^"\\])*)"',
@@ -4617,6 +4739,19 @@ def _json_string_field(raw, field):
         return value.replace("\\n", "\n").replace('\\"', '"')
 
 
+def _loose_json_array_field(raw, field):
+    match = re.search(rf'"{re.escape(field)}"\s*:\s*\[(.*?)(?:\]\s*,|\]\s*}}|\]\s*$)', str(raw or ""), re.DOTALL)
+    if not match:
+        return []
+    values = []
+    for item in re.findall(r'"((?:\\.|[^"\\])*)"', match.group(1)):
+        try:
+            values.append(json.loads(f'"{item}"'))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            values.append(item.replace("\\n", "\n").replace('\\"', '"'))
+    return [str(item).strip() for item in values if str(item).strip()]
+
+
 def _loose_professional_question_payload(raw):
     text = str(raw or "")
     payload = {
@@ -4626,76 +4761,9 @@ def _loose_professional_question_payload(raw):
         "reference_answer": _json_string_field(text, "reference_answer"),
         "similar_question": _json_string_field(text, "similar_question"),
     }
-    points = re.findall(r'"grading_points"\s*:\s*\[(.*?)\]', text, re.DOTALL)
-    if points:
-        payload["grading_points"] = [
-            item.strip()
-            for item in re.findall(r'"((?:\\.|[^"\\])*)"', points[0])
-            if item.strip()
-        ]
-    options = re.findall(r'"options"\s*:\s*\[(.*?)\]', text, re.DOTALL)
-    if options:
-        payload["options"] = [
-            item.strip()
-            for item in re.findall(r'"((?:\\.|[^"\\])*)"', options[0])
-            if item.strip()
-        ]
+    payload["grading_points"] = _loose_json_array_field(text, "grading_points")
+    payload["options"] = _loose_json_array_field(text, "options")
     return payload
-
-
-def _build_local_quiz_question(name, exam_styles, keywords, variant=0):
-    combined = " ".join([name, " ".join(exam_styles or []), " ".join(keywords or [])]).lower()
-    style = exam_styles[0] if exam_styles else "应用分析"
-    keyword_hint = f"作答时至少用到：{'、'.join(keywords[:4])}。" if keywords else "作答时写清关键条件、过程和结论。"
-    scenarios = []
-    if any(token in combined for token in ("外部排序", "多路归并", "败者树")):
-        scenarios.extend([
-            "有 24 个初始归并段，内存缓冲区允许 4 路归并。请计算至少需要几趟归并，并说明如果引入败者树，主要优化的是哪一部分开销。",
-            "某外部排序已经形成 18 个初始归并段，设备限制最多做 5 路归并。请给出归并趟数，并说明增加归并路数为什么不一定总是更好。",
-        ])
-    if any(token in combined for token in ("cache", "高速缓存", "组相联", "直接映射")):
-        scenarios.extend([
-            "某机主存地址 32 位，Cache 容量 32KB，块大小 64B，采用 4 路组相联。请划分主存地址字段，并说明一次访存如何定位到具体 Cache 行。",
-            "同一段循环代码反复访问相邻数组元素。请分别说明直接映射和组相联 Cache 下可能出现的冲突，并给出一种降低缺失率的思路。",
-        ])
-    if any(token in combined for token in ("alu", "标志位", "补码", "溢出")):
-        scenarios.extend([
-            "在 8 位补码机器中计算 01111111 + 00000001。请写出结果，并判断 ZF、SF、CF、OF 中哪些会被置位，说明依据。",
-            "在 8 位机器中执行 10000000 - 00000001。请按补码加法过程写出结果，并区分进位标志和溢出标志的含义。",
-        ])
-    if any(token in combined for token in ("i/o", "io", "接口", "端口", "中断", "dma")):
-        scenarios.extend([
-            "某外设接口包含数据端口、状态端口和控制端口，CPU 采用独立编址方式。现在要先查询设备是否就绪，再写入控制命令并传送一个字节。请写出访问顺序，并说明每个端口的作用。",
-            "比较程序查询、中断和 DMA 三种 I/O 方式：若一次要传输 4KB 连续数据，哪种方式更合适？请说明 CPU 参与程度和数据通路差异。",
-        ])
-    if any(token in combined for token in ("aov", "拓扑", "活动", "有向无环")):
-        scenarios.extend([
-            "已知活动依赖为 A->C、B->C、C->D、B->E、E->D。请给出一种拓扑序列，并说明如何判断该图是否存在环。",
-            "某课程先修关系形成 AOV 网。若拓扑排序过程中入度为 0 的顶点集合突然为空，但仍有顶点未输出，这说明什么？请写出判断依据。",
-        ])
-    if any(token in combined for token in ("b树", "b+树", "b 树", "b+ 树")):
-        scenarios.extend([
-            "比较 B 树和 B+ 树在范围查询中的表现。若要查找 [30, 80] 范围内的所有关键字，为什么数据库索引更常用 B+ 树？",
-            "一棵 m 阶 B 树插入关键字后结点上溢。请说明分裂过程，并指出它和 B+ 树插入时数据存放位置的差别。",
-        ])
-    if any(token in combined for token in ("进程", "线程", "调度", "死锁")):
-        scenarios.extend([
-            "系统中有三个进程竞争两类资源。请说明判断死锁至少要看哪些条件，并给出一种破坏死锁的处理办法。",
-            "比较进程切换和线程切换的开销来源。若一个服务器需要同时处理大量网络请求，为什么通常会考虑多线程或事件驱动？",
-        ])
-    if any(token in combined for token in ("tcp", "ip", "路由", "子网", "拥塞", "滑动窗口")):
-        scenarios.extend([
-            "主机 A 向主机 B 发送 TCP 数据，接收窗口从 8KB 降到 2KB，同时网络出现丢包。请分别说明流量控制和拥塞控制各在解决什么问题。",
-            "给定 IP 地址 192.168.10.77/26，请写出网络地址、可用主机范围，并说明路由器转发时主要依据哪一部分信息。",
-        ])
-    if not scenarios:
-        keyword_a = keywords[0] if keywords else name
-        keyword_b = keywords[1] if len(keywords) > 1 else "适用条件"
-        scenarios = [
-            f"下面有三种说法：A. {keyword_a} 只需要背定义；B. 做题时必须先判断 {keyword_b}；C. 任何题都可以直接套固定公式。请判断哪些说法可靠，并结合“{name}”说明理由。",
-            f"给出一个围绕“{name}”的{style}题：某同学把它和相邻概念混用，导致结论错误。请指出错误在哪里，写出正确判断步骤，并补一个易错提醒。",
-        ]
-    return f"{scenarios[variant % len(scenarios)]} {keyword_hint}"
 
 
 def _question_mode_label(mode):
@@ -4710,204 +4778,20 @@ def _question_mode_label(mode):
     return labels.get(mode or "", "练习题")
 
 
-def _local_choice_question(name, keywords, variant=0):
-    keyword = keywords[0] if keywords else name
-    distractor = keywords[1] if len(keywords) > 1 else "相邻概念"
-    combined = f"{name} {' '.join(keywords or [])}".lower()
-    if any(token in combined for token in ("aov", "拓扑", "活动", "有向无环")):
-        variants = [
-            (
-                "某 AOV 网在拓扑排序过程中还有顶点未输出，但当前入度为 0 的顶点集合为空。下列判断最合适的是哪一项？",
-                [
-                    "A. 图中一定不存在环，只是还没选到起点。",
-                    "B. 图中存在有向环，剩余顶点无法继续拓扑排序。",
-                    "C. 只要换成邻接矩阵存储，就一定可以继续输出。",
-                    "D. 拓扑排序只能判断连通无向图，不能处理课程先修关系。",
-                ],
-                "B",
-                "入度为 0 的顶点集合为空且仍有顶点未输出，说明剩余顶点互相依赖，存在有向环。",
-            ),
-            (
-                "已知活动依赖 A->C、B->C、C->D。关于该 AOV 网的拓扑序列，下列说法正确的是哪一项？",
-                [
-                    "A. A 必须排在 B 前面。",
-                    "B. C 可以排在 A 或 B 前面。",
-                    "C. A、B 都必须排在 C 前面，D 必须排在 C 后面。",
-                    "D. 只要输出 D，就不需要考虑 C 的位置。",
-                ],
-                "C",
-                "A 和 B 都是 C 的前驱，C 又是 D 的前驱，因此 A、B 在 C 前，C 在 D 前。",
-            ),
-        ]
-        question, options, correct, reference = variants[variant % len(variants)]
-        return {
-            "question": question,
-            "options": options,
-            "correct_answer": correct,
-            "reference_answer": f"选 {correct}。{reference}",
-            "grading_points": ["判断入度/前驱关系", "识别有向无环图约束", "说明排除理由"],
-            "similar_question": "换一组课程先修关系，判断是否能完成拓扑排序。",
-        }
-    variants = [
-        (
-            f"关于“{name}”，下列说法最恰当的是哪一项？请先选出选项，再说明理由。",
-            [
-                f"A. 只要背出“{name}”的定义，就一定能解决所有相关题目。",
-                f"B. 做“{name}”相关题时，通常要先判断题干条件，再选择对应方法。",
-                f"C. “{keyword}”和“{distractor}”在任何场景下都可以互换。",
-                f"D. 遇到“{name}”题目时，不需要说明过程，只写结论即可。",
-            ],
-        ),
-        (
-            f"围绕“{name}”做题时，下列哪一项最符合 408 的答题思路？",
-            [
-            f"A. “{name}”只会考纯记忆，不会结合应用场景。",
-            f"B. 若题干改变约束条件，“{name}”的判断步骤或计算过程可能随之变化。",
-            f"C. “{keyword}”出现时，答案一定唯一且不需要说明理由。",
-            f"D. 相关概念之间没有必要比较差异。",
-            ],
-        ),
-    ]
-    question, options = variants[variant % len(variants)]
+def _empty_professional_question_payload(mode):
     return {
-        "question": question,
-        "options": options,
-        "correct_answer": "B",
-        "reference_answer": f"选 B。关键不是背名词，而是根据题干条件判断“{name}”的适用场景、过程和结论。",
-        "grading_points": ["选出 B", "说明题干条件", "指出易混说法为什么不可靠"],
-        "similar_question": f"换一个关于“{name}”的选择题：哪一项最能体现它和相邻概念的区别？",
-    }
-
-
-def _local_blank_question(name, keywords, variant=0):
-    keyword = keywords[0] if keywords else name
-    second = keywords[1] if len(keywords) > 1 else "适用条件"
-    combined = f"{name} {' '.join(keywords or [])}".lower()
-    if any(token in combined for token in ("aov", "拓扑", "活动", "有向无环")):
-        variants = [
-            (
-                "填空：对 AOV 网做拓扑排序时，每一轮应优先选择当前入度为 ______ 的顶点输出。",
-                "0",
-                ["知道入度为 0", "能解释前驱活动已完成", "能继续更新后继入度"],
-            ),
-            (
-                "填空：若拓扑排序未输出全部顶点，但当前没有入度为 0 的顶点，说明该有向图中存在 ______ 。",
-                "有向环",
-                ["判断未输出顶点", "识别无入度为 0 顶点", "推出存在有向环"],
-            ),
-        ]
-        question, answer, points = variants[variant % len(variants)]
-        return {
-            "question": question,
-            "reference_answer": f"参考填法：{answer}。要能说明入度变化和是否存在有向环的判断依据。",
-            "grading_points": points,
-            "similar_question": "给出一组先修边，挖空某一步的入度集合或输出序列。",
-        }
-    variants = [
-        (
-            f"填空：做“{name}”相关题时，先判断 ______ ，再写出关键过程或结论。",
-            second,
-            ["写出条件", "扣回知识点", "能解释为什么"],
-        ),
-        (
-            f"填空：“{name}”常和 ______ 混淆，复习时要比较二者的适用场景和判断步骤。",
-            keyword,
-            ["写出易混对象", "比较适用场景", "说明判断步骤"],
-        ),
-    ]
-    question, answer, points = variants[variant % len(variants)]
-    return {
-        "question": question,
-        "reference_answer": f"参考填法：{answer}。关键是填完后能解释这个空为什么影响解题。",
-        "grading_points": points,
-        "similar_question": f"围绕“{name}”再出一道填空：把容易漏掉的判断条件挖空。",
-    }
-
-
-def _local_algorithm_question(name, keywords, variant=0):
-    combined = f"{name} {' '.join(keywords or [])}".lower()
-    if any(token in combined for token in ("aov", "拓扑", "活动", "有向无环")):
-        variants = [
-            (
-                "给定 AOV 网的边集：A->C、B->C、C->E、B->D、D->E。"
-                "请写出一种拓扑排序算法的关键步骤，给出一个合法拓扑序列，并分析时间复杂度。"
-            ),
-            (
-                "某工程共有活动 0,1,2,3,4，先后约束为 0->2、1->2、2->3、3->1、3->4。"
-                "请用拓扑排序判断工程能否完成，写出入度变化的关键步骤，并说明判断依据。"
-            ),
-        ]
-        question = variants[variant % len(variants)]
-        return {
-            "question": question,
-            "reference_answer": "参考要点：建立入度数组和邻接表；反复取入度为 0 的顶点输出并删除其出边；若输出顶点数等于总顶点数则存在拓扑序列，否则存在有向环；邻接表实现时间复杂度为 O(V+E)。",
-            "grading_points": ["建图和入度数组", "入度为 0 顶点入队/输出", "删除出边并更新入度", "判断是否有环", "复杂度 O(V+E)"],
-            "similar_question": "更换边集后重新判断能否完成，并写出至少一个合法拓扑序列。",
-        }
-    if any(token in combined for token in ("排序", "查找", "树", "图", "拓扑", "aov", "kmp", "链表", "队列", "栈")):
-        question = (
-            f"围绕“{name}”完成一道算法题：给定一个小规模输入样例，"
-            "请写出算法思路、关键步骤/伪代码，并分析时间复杂度。"
-            f"作答时至少用到：{'、'.join(keywords[:4]) if keywords else name}。"
-        )
-    else:
-        question = (
-            f"把“{name}”改写成过程推演题：请给出处理流程、关键判断条件，"
-            "并说明每一步为什么成立。若它不适合写成算法题，请说明原因并改成综合应用题作答。"
-        )
-    return {
-        "question": question,
-        "reference_answer": f"答案应包含：问题建模、关键步骤或伪代码、边界条件、复杂度/代价分析，并扣回“{name}”的核心定义。",
-        "grading_points": ["建模正确", "步骤完整", "边界条件", "复杂度分析", "扣回知识点"],
-        "similar_question": f"围绕“{name}”再设计一个输入规模更大的算法/过程推演题。",
-    }
-
-
-def _fallback_professional_question(point, mode, variant=0):
-    name = point.get("knowledge_name") or "这个知识点"
-    answer = point.get("core_definition") or point.get("source_text") or point.get("content") or "请结合上传资料作答。"
-    exam_styles = _parse_json_list(point.get("exam_question_styles_json"))
-    keywords = _parse_json_list(point.get("keywords_json"))[:4]
-    keyword_hint = f"可以围绕 {'、'.join(keywords)} 展开。" if keywords else "注意写出关键条件、过程和结论。"
-    if mode == "concept":
-        question = (
-            f"某同学复习“{name}”时，只记住了名词但说不清它解决什么问题。"
-            f"请用自己的话解释它的核心含义、适用场景，并举一个容易混淆的概念作比较。{keyword_hint}"
-        )
-    elif mode == "choice":
-        payload = _local_choice_question(name, keywords, variant)
-        return {
-            "question_type": "choice",
-            **payload,
-        }
-    elif mode == "blank":
-        payload = _local_blank_question(name, keywords, variant)
-        return {
-            "question_type": "blank",
-            **payload,
-        }
-    elif mode == "algorithm":
-        payload = _local_algorithm_question(name, keywords, variant)
-        return {
-            "question_type": "algorithm",
-            **payload,
-        }
-    elif exam_styles:
-        question = _build_local_quiz_question(name, exam_styles, keywords, variant)
-    else:
-        question = _build_local_quiz_question(name, exam_styles, keywords, variant)
-    return {
-        "question_type": "concept" if mode == "concept" else "application",
-        "question": question,
-        "reference_answer": str(answer)[:1800],
-        "grading_points": _parse_json_list(point.get("keywords_json"))[:6],
-        "similar_question": f"围绕“{name}”换一个条件或角度再做一题。",
+        "question_type": mode or "application",
+        "question": "",
+        "options": [],
+        "correct_answer": "",
+        "reference_answer": "",
+        "grading_points": [],
+        "similar_question": "",
     }
 
 
 def _is_placeholder_question(question):
-    normalized = re.sub(r"[\s。！？!?,，:：；;、]+", "", str(question or "")).strip()
-    return normalized in {"", "题目", "问题", "练习题", "概念自测", "请作答"}
+    return question_validator.is_placeholder_question(question)
 
 
 def _question_generation_error(point, mode, warning):
@@ -4927,7 +4811,7 @@ def _question_generation_error(point, mode, warning):
 
 
 def _generate_professional_question(point, mode="quiz", variant=0):
-    fallback = _fallback_professional_question(point, mode, variant=variant)
+    fallback = _empty_professional_question_payload(mode)
     if not os.environ.get("AI_API_KEY", "").strip():
         return _question_generation_error(point, mode, "未配置 AI_API_KEY，无法生成专业课练习题。")
     generated, warning = _generate_professional_question_with_ai(
@@ -4948,26 +4832,35 @@ def _normalize_professional_question_payload(payload, point, mode, fallback):
     if not isinstance(payload, dict):
         payload = {}
     question = str(_payload_first(payload, "question", "题干", "题目", "练习题", "问题")).strip()
+    answer_value = _coerce_answer_text(
+        _payload_first(payload, "correct_answer", "正确答案", "答案选项", "answer", "答案")
+    )
+    choice_match = re.search(r"\b([ABCD])\b|选\s*([ABCD])|答案\s*[:：]?\s*([ABCD])", answer_value, re.IGNORECASE)
+    inferred_choice_answer = (
+        next((group for group in (choice_match.groups() if choice_match else ()) if group), "")
+        .upper()
+    )
     reference_answer = str(
         _payload_first(
             payload,
             "reference_answer",
             "standard_answer",
-            "answer",
             "explanation",
             "analysis",
             "解析",
             "解答",
             "参考答案",
             "标准答案",
-            "答案",
+            *(() if mode == "choice" else ("answer", "答案")),
         )
     ).strip()
     grading_points = _coerce_text_list(
         _payload_first(payload, "grading_points", "score_points", "points", "评分点", "得分点", "要点")
     )
     options = _coerce_text_list(_payload_first(payload, "options", "choices", "选项"))
-    correct_answer = str(_payload_first(payload, "correct_answer", "正确答案", "答案选项")).strip()
+    correct_answer = _coerce_answer_text(_payload_first(payload, "correct_answer", "正确答案", "答案选项"))
+    if mode == "choice" and not correct_answer:
+        correct_answer = inferred_choice_answer
     similar_question = str(_payload_first(payload, "similar_question", "相似题", "同类题")).strip()
     return {
         "question_type": str(payload.get("question_type") or payload.get("题型") or fallback.get("question_type") or mode or "application"),
@@ -4981,85 +4874,30 @@ def _normalize_professional_question_payload(payload, point, mode, fallback):
 
 
 def _is_valid_professional_question(generated, mode):
-    question = str(generated.get("question") or "").strip()
-    reference_answer = str(generated.get("reference_answer") or "").strip()
-    if _is_placeholder_question(question) or len(question) < 18 or not reference_answer:
-        return False
-    if mode == "choice":
-        options = generated.get("options") or []
-        if len(options) < 4 or not str(generated.get("correct_answer") or "").strip():
-            return False
-    return True
+    return question_validator.is_valid_professional_question(generated, mode)
+
+
+def _is_valid_professional_question_for_point(generated, mode, point=None):
+    return question_validator.is_valid_professional_question_for_point(generated, mode, point=point)
 
 
 def _repair_professional_question_payload(raw, point, mode, variant):
-    repair_prompt = f"""你是考研专业课命题老师。下面这段 AI 输出没有整理成系统需要的题目 JSON，请基于“当前知识点”和原输出，补全为一题可作答、可评分的考研专业课题。
-
-要求：
-1. 不要解释，不要展示思考过程，只输出一行 JSON。
-2. 字段固定为：{{"question_type":"choice|blank|application|algorithm|concept","question":"题干","options":["A. ...","B. ...","C. ...","D. ..."],"correct_answer":"B","reference_answer":"参考答案","grading_points":["评分点1","评分点2"],"similar_question":"相似题题干"}}
-3. 题干必须包含具体条件或明确任务，不能写“围绕某知识点作答”。
-4. 如果原输出不足，就直接根据当前知识点生成一题新的 408/专业课风格题。
-5. 如果不是选择题，options 可为空数组，correct_answer 可为空字符串。
-6. 第 {variant} 次换题，换场景、换数据或换问法。
-
-题型：{mode}
-当前知识点：
-{_point_context(point, include_source=False)}
-
-原输出：
-{str(raw or '')[:2500]}
-"""
-    return _parse_llm_json(_call_llm_api(repair_prompt, max_tokens=1800, temperature=0.35))
+    repair_prompt = question_prompts.build_repair_professional_question_prompt(raw, point, mode, variant)
+    return _parse_llm_json(_call_llm_api(repair_prompt, max_tokens=1400, temperature=0.25, timeout=45, retries=0))
 
 
-def _compact_question_context(point):
-    name = point.get("knowledge_name") or "当前知识点"
-    subject = point.get("subject") or point.get("chapter_name") or ""
-    definition = str(point.get("core_definition") or point.get("content") or point.get("review_content") or "").strip()
-    traps = str(point.get("common_traps") or point.get("mistake_prone") or "").strip()
-    keywords = "、".join(_parse_json_list(point.get("keywords_json"))[:6])
-    parts = [f"知识点：{name}"]
-    if subject:
-        parts.append(f"科目：{subject}")
-    if keywords:
-        parts.append(f"关键词：{keywords}")
-    if definition:
-        parts.append(f"核心：{definition[:280]}")
-    if traps:
-        parts.append(f"易错点：{traps[:160]}")
-    return "\n".join(parts)
+def _compact_question_context(point, mode=None, variant=1):
+    return question_prompts.compact_question_context(point, mode=mode, variant=variant)
 
 
 def _minimal_professional_question_payload(point, mode, variant):
-    name = point.get("knowledge_name") or "当前知识点"
-    keywords = "、".join(_parse_json_list(point.get("keywords_json"))[:4])
-    mode_hint = {
-        "choice": "单选题，必须有A/B/C/D四个选项和唯一正确答案",
-        "blank": "填空题，空格挖在关键条件或步骤上",
-        "algorithm": "算法题或过程推演题，要给具体输入或条件",
-        "concept": "概念辨析题，要比较易混概念",
-        "application": "综合应用题，要给具体数据或场景",
-        "quiz": "综合应用题，要给具体数据或场景",
-    }.get(mode, "综合应用题，要给具体数据或场景")
-    prompt = (
-        f"你是408命题老师。围绕{name}出一道{mode_hint}。"
-        f"关键词：{keywords or name}。第{variant}次换题，请换数据或问法。"
-        "只输出JSON，包含question, reference_answer, grading_points。"
-        "如果是选择题，再包含options和correct_answer。"
-    )
-    return _parse_llm_json(_call_llm_api(prompt, max_tokens=900, temperature=0.35))
+    prompt = question_prompts.build_minimal_professional_question_prompt(point, mode, variant)
+    return _parse_llm_json(_call_llm_api(prompt, max_tokens=1200, temperature=0.35, timeout=45, retries=0))
 
 
 def _complete_professional_reference_payload(point, question):
-    prompt = (
-        "你是408考研阅卷老师。请给下面题目写参考答案和评分点。"
-        "只输出JSON，包含reference_answer和grading_points。"
-        "参考答案要能用于批改，评分点写成数组。\n"
-        f"知识点：{point.get('knowledge_name') or '当前知识点'}\n"
-        f"题目：{question}"
-    )
-    return _parse_llm_json(_call_llm_api(prompt, max_tokens=900, temperature=0.2))
+    prompt = question_prompts.build_complete_professional_reference_prompt(point, question)
+    return _parse_llm_json(_call_llm_api(prompt, max_tokens=1200, temperature=0.2, timeout=45, retries=0))
 
 
 def _complete_reference_if_needed(generated, point):
@@ -5079,46 +4917,29 @@ def _complete_reference_if_needed(generated, point):
 
 
 def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, allow_fallback=False):
-    fallback = _fallback_professional_question(point, mode, variant=variant)
+    fallback = _empty_professional_question_payload(mode)
     if not os.environ.get("AI_API_KEY", "").strip():
         warning = "未配置 AI_API_KEY，无法生成专业课练习题。"
         return _question_generation_error(point, mode, warning), warning
-    mode_guidance = {
-        "choice": "生成一道408统考风格单选题，必须有 A/B/C/D 四个选项、唯一正确答案和解析。",
-        "blank": "生成一道填空题，空格必须挖在关键条件、算法步骤、字段含义或易混点上，不能只挖名词。",
-        "algorithm": "生成一道算法题或过程推演题，必须给出输入/条件、要求写思路或伪代码，并能评分。",
-        "application": "生成一道综合应用题，题干必须有具体条件、任务和可评分步骤。",
-        "quiz": "生成一道综合应用题，题干必须有具体条件、任务和可评分步骤。",
-        "concept": "生成一道概念辨析题，要求解释核心含义、适用条件和易混点。",
-    }.get(mode, "生成一道综合应用题，题干必须具体可作答。")
-    prompt = f"""你是408考研专业课命题老师。根据下面知识点出一题，难度中等，题干要有具体数据、条件或场景，不能写“围绕某知识点作答”。
-题型要求：{mode_guidance}
-只输出JSON，包含 question_type、question、options、correct_answer、reference_answer、grading_points、similar_question。
-非选择题 options 用空数组，correct_answer 可为空。第{variant}次换题，请更换数据或问法。
-
-{_compact_question_context(point)}
-"""
+    prompt = question_prompts.build_professional_question_prompt(point, mode=mode, variant=variant)
     try:
         raw = ""
         generated = {}
-        for attempt in range(2):
-            retry_prompt = prompt if attempt == 0 else f"{prompt}\n请重新换一组题目数据，直接给可作答题目。"
-            raw = _call_llm_api(retry_prompt, max_tokens=1400, temperature=0.5 + attempt * 0.08)
-            payload = _parse_llm_json(raw)
-            generated = _normalize_professional_question_payload(payload, point, mode, fallback)
-            if not _is_valid_professional_question(generated, mode):
-                loose_payload = _loose_professional_question_payload(raw)
-                generated = _normalize_professional_question_payload(loose_payload, point, mode, fallback)
-                generated = _complete_reference_if_needed(generated, point)
-            if _is_valid_professional_question(generated, mode):
-                break
-        if not _is_valid_professional_question(generated, mode):
-            repaired = _repair_professional_question_payload(raw, point, mode, variant)
-            generated = _normalize_professional_question_payload(repaired, point, mode, fallback)
+        raw = _call_llm_api(prompt, max_tokens=1200, temperature=0.45, timeout=25, retries=1)
+        payload = _parse_llm_json(raw)
+        generated = _normalize_professional_question_payload(payload, point, mode, fallback)
+        generated = _complete_reference_if_needed(generated, point)
+        if not _is_valid_professional_question_for_point(generated, mode, point):
+            loose_payload = _loose_professional_question_payload(raw)
+            generated = _normalize_professional_question_payload(loose_payload, point, mode, fallback)
             generated = _complete_reference_if_needed(generated, point)
-        if not _is_valid_professional_question(generated, mode):
-            minimal = _minimal_professional_question_payload(point, mode, variant)
-            generated = _normalize_professional_question_payload(minimal, point, mode, fallback)
+        if not _is_valid_professional_question_for_point(generated, mode, point):
+            repair_payload = _repair_professional_question_payload(raw, point, mode, variant)
+            generated = _normalize_professional_question_payload(repair_payload, point, mode, fallback)
+            generated = _complete_reference_if_needed(generated, point)
+        if not _is_valid_professional_question_for_point(generated, mode, point):
+            minimal_payload = _minimal_professional_question_payload(point, mode, variant)
+            generated = _normalize_professional_question_payload(minimal_payload, point, mode, fallback)
             generated = _complete_reference_if_needed(generated, point)
     except Exception as exc:
         warning = _format_llm_error(exc)
@@ -5126,7 +4947,7 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
             fallback["generation_warning"] = warning
             return fallback, warning
         return _question_generation_error(point, mode, warning), warning
-    if not _is_valid_professional_question(generated, mode):
+    if not _is_valid_professional_question_for_point(generated, mode, point):
         warning = "AI 返回的题干或参考答案不完整。"
         if allow_fallback:
             fallback["generation_warning"] = warning
@@ -5140,6 +4961,8 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
         "reference_answer": generated.get("reference_answer") or "",
         "grading_points": generated.get("grading_points") or [],
         "similar_question": generated.get("similar_question") or "",
+        "generation_failed": False,
+        "generation_warning": "",
     }, ""
 
 
@@ -5182,12 +5005,16 @@ def _fallback_professional_grade(point, answer):
         "mistake_reason": mistake_reason,
         "next_review": "回到核心定义、适用条件和易错点，再做一道同类题。",
         "similar_question": "把题干条件换一个角度，重新判断本知识点的适用过程。",
+        "grading_source": "local_estimate",
+        "grading_warning": "",
+        "is_authoritative": False,
     }
 
 
 def _grade_professional_answer(point, question, answer, reference_answer, grading_points, mode, correct_answer="", *, use_ai=True):
     fallback = _fallback_professional_grade(point, answer)
     if not use_ai or not os.environ.get("AI_API_KEY", "").strip():
+        fallback["grading_warning"] = "AI 批改当前不可用，本次仅为本地参考估分，不计入正式学习进度。"
         return fallback
     prompt = f"""你是考研专业课阅卷老师，按“408/院校专业课主观题”标准批改。不要展示思考过程，不要安慰，不要泛泛鼓励，只给考生能改答案的内容。
 
@@ -5240,7 +5067,10 @@ JSON 字段固定为：
     try:
         payload = _parse_llm_json(_call_llm_api(prompt, max_tokens=1600, temperature=0.15))
         score = max(0, min(100, int(payload.get("score"))))
-    except (Exception, TypeError, ValueError):
+    except (Exception, TypeError, ValueError) as exc:
+        fallback["grading_warning"] = (
+            f"AI 批改失败，本次仅为本地参考估分，不计入正式学习进度。{_format_llm_error(exc)}"
+        )
         return fallback
     feedback = str(payload.get("feedback") or fallback["feedback"]).strip()
     rating = str(payload.get("rating") or "").strip().lower()
@@ -5268,6 +5098,9 @@ JSON 字段固定为：
             item for item in score_breakdown
             if isinstance(item, dict) and str(item.get("point") or item.get("得分点") or "").strip()
         ][:8],
+        "grading_source": "ai",
+        "grading_warning": "",
+        "is_authoritative": True,
     }
 
 
@@ -5303,7 +5136,24 @@ def _question_with_options(question, options):
     return f"{question}\n" + "\n".join(options)
 
 
+def _merge_generated_question_state(active, generated, warning=""):
+    merged = dict(active or {})
+    merged.update(generated or {})
+    if (generated or {}).get("generation_failed"):
+        merged["generation_failed"] = True
+    else:
+        merged.pop("generation_failed", None)
+    if warning:
+        merged["generation_warning"] = warning
+    else:
+        merged.pop("generation_warning", None)
+    merged.pop("result", None)
+    return merged
+
+
 def _render_grade_details(result):
+    if result.get("grading_warning"):
+        st.warning(result.get("grading_warning"))
     breakdown = result.get("score_breakdown") or []
     if breakdown:
         st.markdown("**得分点拆解**")
@@ -5391,11 +5241,8 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
                 variant=variant,
                 allow_fallback=False,
             )
-            active.update(generated)
-            if warning:
-                active["generation_warning"] = warning
+            active = _merge_generated_question_state(active, generated, warning)
             active["variant"] = variant
-            active.pop("result", None)
             st.session_state[state_key] = active
             st.rerun()
     with tool_col2:
@@ -5439,8 +5286,12 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
             st.markdown(active.get("reference_answer") or "暂无参考答案。")
         ai_col, close_result_col = st.columns([1, 1])
         with ai_col:
-            if os.environ.get("AI_API_KEY", "").strip() and st.button(
-                "AI 精批这题",
+            can_retry_ai_grade = (
+                result.get("grading_source") != "ai"
+                and bool(os.environ.get("AI_API_KEY", "").strip())
+            )
+            if can_retry_ai_grade and st.button(
+                "重新尝试 AI 批改",
                 key=f"pk_study_ai_grade_{scope}_{point.get('id')}_{active.get('mode')}",
                 use_container_width=True,
             ):
@@ -5512,15 +5363,16 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
             active.get("correct_answer") or "",
             use_ai=bool(os.environ.get("AI_API_KEY", "").strip()),
         )
-        _save_professional_study_result(
-            user_id,
-            subject,
-            point,
-            active.get("mode") or "quiz",
-            _question_with_options(active.get("question") or "", active.get("options") or []),
-            answer.strip(),
-            result,
-        )
+        if result.get("grading_source") != "local_estimate":
+            _save_professional_study_result(
+                user_id,
+                subject,
+                point,
+                active.get("mode") or "quiz",
+                _question_with_options(active.get("question") or "", active.get("options") or []),
+                answer.strip(),
+                result,
+            )
         active["result"] = result
         st.session_state[state_key] = active
         st.rerun()
@@ -5538,12 +5390,12 @@ def _render_subject_management(selected_subject):
             )
         with right:
             st.markdown("**移除当前专业课**")
-            st.caption("移除后它不再出现在选择列表中；已上传资料和知识点会保留，可重新启用。")
+            st.caption("移除后它不再出现在选择列表中；已生成的知识点会保留，可重新启用。")
             if st.button("删除专业课", key="request_delete_subject_v1", use_container_width=True):
                 st.session_state["_pending_delete_subject_key"] = profile.key if profile else ""
                 st.rerun()
             if st.session_state.get("_pending_delete_subject_key") == (profile.key if profile else None):
-                st.warning(f"确认移除“{selected_subject}”？此操作会隐藏该专业课，但不会删除已上传资料。")
+                st.warning(f"确认移除“{selected_subject}”？此操作会隐藏该专业课，但不会删除已生成的知识点。")
                 confirmed = st.checkbox(
                     f"我确认移除“{selected_subject}”",
                     key=f"confirm_delete_subject_{profile.key if profile else 'unknown'}",
@@ -5647,7 +5499,7 @@ def _is_syllabus_source(source):
 
 def _render_professional_knowledge_library(user_id, subject, points, sources):
     if not points:
-        st.info("这门专业课还没有知识点。可以先上传自己学校的考纲或课程资料，整理完成后会显示在这里。")
+        st.info("这门专业课还没有知识点。上传学校考试大纲或个人复习资料后，整理出的条目会显示在这里。")
         return
 
     source_by_id = {source.get("id"): source for source in sources}
@@ -5765,7 +5617,7 @@ def _render_professional_knowledge_library(user_id, subject, points, sources):
         if point.get("knowledge_type"):
             meta_items.append(point.get("knowledge_type"))
         if source and source.get("filename"):
-            meta_items.append("来自上传资料")
+            meta_items.append("来自考试大纲" if _is_syllabus_source(source) else "来自个人资料")
         meta_html = "".join(f"<span>{_escape_html(item)}</span>" for item in meta_items if item)
         st.markdown(
             f"""
@@ -5822,8 +5674,10 @@ def _render_professional_knowledge_library(user_id, subject, points, sources):
             if related:
                 st.markdown(f"**关联知识点**：{'、'.join(related)}")
             st.markdown(f"**掌握标准**：{_mastery_standard_for_point(point)}")
-            st.markdown("**真题风格例题**")
-            st.info(_exam_style_example_for_point(point))
+            example_question = _exam_style_example_for_point(point)
+            if example_question:
+                st.markdown("**真题风格例题**")
+                st.info(example_question)
         _render_professional_study_panel(
             user_id,
             subject,
@@ -5848,7 +5702,7 @@ def _memory_due(row):
 
 def _render_professional_review_challenge(user_id, subject, points):
     if not points:
-        st.info("知识库还是空的，先上传资料再开始复习。")
+        st.info("知识库还是空的，先上传考试大纲或个人复习资料再开始复习。")
         return
     point_map = {point.get("id"): point for point in points if point.get("id") is not None}
     conn = sqlite3.connect(MEMORY_DB)
@@ -5967,7 +5821,7 @@ def _render_saved_question_review(user_id, subject, point_map):
         if st.button("只标记练过", key=f"pk_saved_question_mark_{selected_id}", use_container_width=True):
             conn = sqlite3.connect(MEMORY_DB)
             try:
-                mark_saved_question_practiced(conn, int(selected_id))
+                mark_saved_question_practiced(conn, int(selected_id), user_id)
                 conn.commit()
             finally:
                 conn.close()
@@ -5986,23 +5840,24 @@ def _render_saved_question_review(user_id, subject, point_map):
             saved.get("reference_answer") or "",
             grading_points,
             "saved_question_review",
-            use_ai=False,
+            use_ai=bool(os.environ.get("AI_API_KEY", "").strip()),
         )
         conn = sqlite3.connect(MEMORY_DB)
         try:
-            record_study_result(
-                conn,
-                user_id=user_id,
-                subject=subject,
-                knowledge_id=saved.get("knowledge_id"),
-                study_mode="saved_question_review",
-                question=saved.get("question") or "",
-                user_answer=answer.strip(),
-                feedback=result.get("feedback") or "",
-                score=result.get("score") or 0,
-                rating=result.get("rating") or "again",
-            )
-            mark_saved_question_practiced(conn, int(selected_id))
+            if result.get("grading_source") != "local_estimate":
+                record_study_result(
+                    conn,
+                    user_id=user_id,
+                    subject=subject,
+                    knowledge_id=saved.get("knowledge_id"),
+                    study_mode="saved_question_review",
+                    question=saved.get("question") or "",
+                    user_answer=answer.strip(),
+                    feedback=result.get("feedback") or "",
+                    score=result.get("score") or 0,
+                    rating=result.get("rating") or "again",
+                )
+            mark_saved_question_practiced(conn, int(selected_id), user_id)
             conn.commit()
         finally:
             conn.close()
@@ -6115,7 +5970,7 @@ def _render_professional_feynman(user_id, subject, points):
 
 def _render_professional_memory_system(user_id, subject, points):
     if not points:
-        st.info("上传资料并整理出知识点后，这里会开始记录掌握情况。")
+        st.info("上传考试大纲或个人复习资料并整理出知识点后，这里会开始记录掌握情况。")
         return
     point_map = {point.get("id"): point for point in points if point.get("id") is not None}
     conn = sqlite3.connect(MEMORY_DB)
@@ -6257,7 +6112,7 @@ def render_knowledge_page():
                 </div>
                 <div>
                     <h1>专业课学习</h1>
-                    <p>资料识别 · 提纲整理 · 来源问答 · 知识库 · 背诵手册 DOCX</p>
+                    <p>考纲解析 · 背诵知识库 · 真题风格练习 · 背诵手册 DOCX</p>
                 </div>
             </div>
         </div>
@@ -6270,8 +6125,8 @@ def render_knowledge_page():
             <div class="pk-start-guide-title">从这里开始</div>
             <div class="pk-start-guide-body">
                 <p>先选专业课；没有就新建一门。408 已内置知识库，其他专业课先填清考试科目，后面会按科目整理。</p>
-                <p>资料建议从目标院校最新考纲开始，再补参考书、讲义、真题回忆和老师重点。上传后，左边勾选资料，右边可以直接问“怎么背、哪里常考、哪些说法不一样”。</p>
-                <p>确认后的知识点会进入下方知识库。你可以展开学习、让 AI 出题、保存题目到复习挑战，也可以用费曼学习法检查自己是否真的讲清楚。</p>
+                <p>第一次使用建议先读取目标院校最新考纲，系统会按科目发散成可背诵条目。平时还可以添加教材、讲义、真题解析或自己的笔记，补充针对性内容。</p>
+                <p>考纲和个人资料整理出的知识点都会进入下方知识库，并可在高级知识条目管理中查看。你可以展开学习、让 AI 出题、保存题目到复习挑战，也可以用费曼学习法检查自己是否真的讲清楚。</p>
             </div>
         </div>
         """,
@@ -6284,7 +6139,7 @@ def render_knowledge_page():
         st.session_state["pk_active_subject_v1"] = pending_subject
 
     if not subjects:
-        st.info("还没有已配置的专业课。先创建一门专业课，再上传资料。")
+        st.info("还没有已配置的专业课。先创建一门专业课，再上传考试大纲或个人复习资料。")
         _render_subject_setup_wizard(form_key="create_first_subject_workbench_v1")
         return
 
@@ -6294,7 +6149,7 @@ def render_knowledge_page():
         "专业课",
         subjects,
         key="pk_active_subject_v1",
-        help="408 和医学考研与其他专业课一样，都是可管理的配置项。",
+        help="固定专业课和自建专业课都按同一套资料、知识库、出题、复习流程管理。",
     )
     _render_subject_management(selected_subject)
 
@@ -6316,7 +6171,7 @@ def render_knowledge_page():
                 with st.form("workbench_syllabus_upload_v1", clear_on_submit=True):
                     syllabus_file = st.file_uploader(
                         "上传考试大纲",
-                        type=["pdf", "txt", "md"],
+                        type=SUPPORTED_SYLLABUS_FILE_TYPES,
                         accept_multiple_files=False,
                         key="workbench_syllabus_file_v1",
                     )
@@ -6350,16 +6205,21 @@ def render_knowledge_page():
                             _queue_toast("已开始读取大纲并生成背诵内容")
                             st.rerun()
             else:
-                st.markdown('<div class="pk-source-heading">添加资料</div>', unsafe_allow_html=True)
+                st.markdown('<div class="pk-source-heading">添加个人资料</div>', unsafe_allow_html=True)
+                st.caption("支持教材、讲义、真题解析和个人笔记；系统会整理成这门专业课的私有知识条目。")
                 with st.form("workbench_source_upload_v1", clear_on_submit=True):
                     uploaded_files = st.file_uploader(
                         "上传资料",
-                        type=["pdf", "png", "jpg", "jpeg", "txt", "md"],
+                        type=SUPPORTED_MATERIAL_FILE_TYPES,
                         accept_multiple_files=True,
                         key="workbench_source_files_v1",
                         label_visibility="collapsed",
                     )
-                    submitted = st.form_submit_button("添加来源", type="primary", use_container_width=True)
+                    submitted = st.form_submit_button(
+                        "添加来源",
+                        type="primary",
+                        use_container_width=True,
+                    )
                 if submitted:
                     if not uploaded_files:
                         st.warning("请先选择资料文件。")
@@ -6378,7 +6238,7 @@ def render_knowledge_page():
             st.markdown(f'<div class="pk-source-count">{len(sources)} 个来源</div>', unsafe_allow_html=True)
             _render_workbench_task_status(user_id, selected_subject)
             if not sources:
-                st.caption("上传第一份资料后，来源会显示在这里。")
+                st.caption("上传考试大纲或个人资料后，来源会显示在这里。")
             for source in sources:
                 label = source.get("chapter_name") or source.get("filename") or "未命名资料"
                 source_select_col, source_action_col = st.columns([0.82, 0.18], gap="small")
@@ -6546,62 +6406,114 @@ def render_knowledge_page():
             if not cached and cache_id in pending_jobs:
                 _show_inline_job_notice(f"正在生成“{slot_label}”")
             if cached:
-                with st.chat_message("user"):
-                    st.markdown(cached["prompt"])
-                with st.chat_message("assistant"):
-                    st.markdown(cached["answer"])
-                    try:
-                        answer_pdf = build_chat_answer_pdf(
-                            cached["answer"],
-                            subject=selected_subject,
-                            prompt=cached["prompt"],
+                if cached.get("status") == "failed":
+                    st.error(cached.get("error") or "回答生成失败，请稍后重试。")
+                    if st.button(
+                        "重新生成",
+                        key=f"pk_chat_retry_{active_slot}_{selected_subject}",
+                        use_container_width=True,
+                    ):
+                        answer_cache.pop(cache_id, None)
+                        pending_jobs[cache_id] = _start_chat_answer_background(
+                            user_id,
+                            selected_subject,
+                            selected_source_ids,
+                            slot_prompt,
+                            active_slot,
+                            cache_id,
                         )
-                    except (OSError, RuntimeError, ValueError):
-                        pass
-                    else:
-                        st.download_button(
-                            "导出本回答精简版 PDF",
-                            data=answer_pdf,
-                            file_name=chat_answer_pdf_filename(selected_subject, cached["prompt"]),
-                            mime="application/pdf",
-                            key=f"download_chat_answer_pdf_{active_slot}_{source_signature or 'builtin'}",
-                        )
+                        st.rerun()
+                else:
+                    with st.chat_message("user"):
+                        st.markdown(cached["prompt"])
+                    with st.chat_message("assistant"):
+                        st.markdown(cached["answer"])
+                        try:
+                            answer_pdf = build_chat_answer_pdf(
+                                cached["answer"],
+                                subject=selected_subject,
+                                prompt=cached["prompt"],
+                            )
+                        except (OSError, RuntimeError, ValueError):
+                            pass
+                        else:
+                            st.download_button(
+                                "导出本回答精简版 PDF",
+                                data=answer_pdf,
+                                file_name=chat_answer_pdf_filename(selected_subject, cached["prompt"]),
+                                mime="application/pdf",
+                                key=f"download_chat_answer_pdf_{active_slot}_{source_signature or 'builtin'}",
+                            )
 
-        with st.form("professional_source_chat_v1", clear_on_submit=True):
-            question = st.text_input(
-                "基于资料提问",
-                placeholder="例如：比较这几份资料对同一知识点的讲法",
-                label_visibility="collapsed",
-            )
-            ask_submitted = st.form_submit_button("发送", type="primary", use_container_width=True)
-        prompt = question.strip() if ask_submitted else ""
-        if prompt:
+        question_key = f"professional_source_chat_input_{user_id}_{selected_subject}"
+        question = st.text_input(
+            "基于资料提问",
+            placeholder="例如：比较这几份资料对同一知识点的讲法",
+            label_visibility="collapsed",
+            key=question_key,
+        )
+        def _submit_custom_chat_prompt():
+            prompt_text = str(st.session_state.get(question_key) or "").strip()
+            if not prompt_text:
+                return
             st.session_state[active_chat_key] = "custom"
-            custom_cache_id = _chat_cache_id("custom", prompt, source_signature)
-            if custom_cache_id not in answer_cache and custom_cache_id not in pending_jobs:
-                pending_jobs[custom_cache_id] = _start_chat_answer_background(
+            custom_cache_id_inner = _chat_cache_id("custom", prompt_text, source_signature)
+            if (
+                custom_cache_id_inner not in answer_cache
+                and custom_cache_id_inner not in pending_jobs
+            ):
+                pending_jobs[custom_cache_id_inner] = _start_chat_answer_background(
                     user_id,
                     selected_subject,
                     selected_source_ids,
-                    prompt,
+                    prompt_text,
                     "custom",
-                    custom_cache_id,
+                    custom_cache_id_inner,
                 )
-                _sync_chat_answer_from_job(answer_cache, custom_cache_id, pending_jobs[custom_cache_id])
-                if custom_cache_id in answer_cache:
-                    pending_jobs.pop(custom_cache_id, None)
-            st.session_state[f"{active_chat_key}_custom_cache_id"] = custom_cache_id
-            st.rerun()
+                _sync_chat_answer_from_job(
+                    answer_cache,
+                    custom_cache_id_inner,
+                    pending_jobs[custom_cache_id_inner],
+                )
+                if custom_cache_id_inner in answer_cache:
+                    pending_jobs.pop(custom_cache_id_inner, None)
+            st.session_state[f"{active_chat_key}_custom_cache_id"] = custom_cache_id_inner
+
+        st.button(
+            "发送",
+            type="primary",
+            use_container_width=True,
+            key=f"professional_source_chat_send_{user_id}_{selected_subject}",
+            on_click=_submit_custom_chat_prompt,
+        )
         if st.session_state.get(active_chat_key) == "custom":
             custom_cache_id = st.session_state.get(f"{active_chat_key}_custom_cache_id")
             cached = answer_cache.get(custom_cache_id)
             if not cached and custom_cache_id in pending_jobs:
                 _show_inline_job_notice("正在生成自定义回答")
             if cached:
-                with st.chat_message("user"):
-                    st.markdown(cached["prompt"])
-                with st.chat_message("assistant"):
-                    st.markdown(cached["answer"])
+                if cached.get("status") == "failed":
+                    st.error(cached.get("error") or "回答生成失败，请稍后重试。")
+                    if st.button(
+                        "重新生成",
+                        key=f"pk_chat_retry_custom_{selected_subject}",
+                        use_container_width=True,
+                    ):
+                        answer_cache.pop(custom_cache_id, None)
+                        pending_jobs[custom_cache_id] = _start_chat_answer_background(
+                            user_id,
+                            selected_subject,
+                            selected_source_ids,
+                            cached.get("prompt") or "",
+                            "custom",
+                            custom_cache_id,
+                        )
+                        st.rerun()
+                else:
+                    with st.chat_message("user"):
+                        st.markdown(cached["prompt"])
+                    with st.chat_message("assistant"):
+                        st.markdown(cached["answer"])
 
     st.markdown("---")
     heading_col, export_col = st.columns([3.2, 1.4], vertical_alignment="bottom")

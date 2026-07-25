@@ -167,7 +167,8 @@ def _should_disable_thinking(model_name: str) -> bool:
     value = os.environ.get("AI_DISABLE_THINKING", "1").strip().lower()
     if value in {"0", "false", "no", "off"}:
         return False
-    return "deepseek" in (model_name or "").lower()
+    lowered = (model_name or "").lower()
+    return any(marker in lowered for marker in ("deepseek", "mimo", "xiaomi"))
 
 
 def _apply_provider_options(payload: dict, model_name: str) -> None:

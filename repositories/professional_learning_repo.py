@@ -322,6 +322,7 @@ def list_saved_questions(
 def mark_saved_question_practiced(
     conn: sqlite3.Connection,
     saved_question_id: int,
+    user_id: int,
 ) -> None:
     ensure_professional_learning_schema(conn)
     now = datetime.now().isoformat(timespec="seconds")
@@ -330,8 +331,8 @@ def mark_saved_question_practiced(
            SET practice_count=practice_count+1,
                last_practiced=?,
                updated_at=?
-           WHERE id=?""",
-        (now, now, saved_question_id),
+           WHERE id=? AND user_id=?""",
+        (now, now, saved_question_id, user_id),
     )
 
 

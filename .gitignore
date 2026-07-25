@@ -32,8 +32,8 @@ node_modules/
 test_*.py
 !tests/test_*.py
 temp/
-tmp/pdfs/
-output/pdf/
+tmp/
+output/
 data/archive/
 
 # 部署同步脚本

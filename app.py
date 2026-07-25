@@ -617,6 +617,30 @@ st.markdown("""
         display: block;
         height: 100%;
     }
+    .st-key-hub_math button,
+    .st-key-hub_popularity button,
+    .st-key-hub_english button,
+    .st-key-hub_suggest button,
+    .st-key-hub_material button,
+    .st-key-hub_checkin button {
+        min-height: 44px !important;
+        background: #ffffff !important;
+        color: #475569 !important;
+        border: 1px solid #dbe4f0 !important;
+        border-radius: 14px !important;
+        font-weight: 600 !important;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06) !important;
+    }
+    .st-key-hub_math button p,
+    .st-key-hub_popularity button p,
+    .st-key-hub_english button p,
+    .st-key-hub_suggest button p,
+    .st-key-hub_material button p,
+    .st-key-hub_checkin button p {
+        color: #475569 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+    }
     .feature-card .card-icon {
         width: 48px; height: 48px; border-radius: 14px;
         display: inline-flex; align-items: center; justify-content: center;
@@ -983,12 +1007,11 @@ def clear_login_token(user_id):
 # ==================== 核心功能 ====================
 
 def _extract_content(msg):
-    """从 API 响应中提取内容（兼容 MiMo 思维链模型）
-    优先返回 content（最终回答），content 为空时才用 reasoning_content（思考过程）"""
+    """从 API 响应中提取最终回答；不把 reasoning_content 展示给用户。"""
     c = msg.get("content")
     if c is not None and c != "":
         return c
-    return msg.get("reasoning_content") or ""
+    return ""
 
 def _typing_display(placeholder, text, delay=0.02):
     """打字效果显示文本，LaTeX 公式整体插入不拆散"""
@@ -1470,63 +1493,6 @@ try:
     from professional_knowledge import render_professional_knowledge_system
 except Exception:
     render_professional_knowledge_system = None
-
-@st.cache_resource
-def _start_wb_save_server():
-    """启动本地 HTTP 服务器接收错题保存请求（支持图片 base64，绕开 URL 长度限制）。
-    返回监听端口；启动失败返回 None。"""
-    import threading, json as _json_srv
-    from http.server import HTTPServer, BaseHTTPRequestHandler
-    import os as _os
-
-    PORT = 8753
-    _DB_PATH = _os.path.abspath(MEMORY_DB)
-
-    class WBSaveHandler(BaseHTTPRequestHandler):
-        def _cors(self):
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
-        def do_OPTIONS(self):
-            self.send_response(204); self._cors(); self.end_headers()
-
-        def do_POST(self):
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                if length <= 0 or length > 24 * 1024 * 1024:
-                    return self._respond(413, {"success": False, "error": "图片数据过大，请减少图片数量后重试"})
-                body = self.rfile.read(length).decode("utf-8")
-                data = _json_srv.loads(body)
-                uid = data.get("user_id")
-                if not uid:
-                    return self._respond(400, {"success": False, "error": "未登录"})
-                conn = sqlite3.connect(_DB_PATH)
-                result = save_wrongbook_payload(conn, uid, data)
-                conn.close()
-                if result.get("ok"):
-                    self._respond(200, {"success": True, "updated": bool(result.get("updated"))})
-                else:
-                    self._respond(400, {"success": False, "error": result.get("error", "保存失败")})
-            except Exception as e:
-                self._respond(500, {"success": False, "error": str(e)})
-
-        def _respond(self, code, obj):
-            body = _json_srv.dumps(obj).encode("utf-8")
-            self.send_response(code); self._cors()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers(); self.wfile.write(body)
-
-        def log_message(self, *a): pass
-
-    try:
-        srv = HTTPServer(("127.0.0.1", PORT), WBSaveHandler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        return PORT
-    except Exception:
-        return None
-
 
 def log_visit(action, detail=""):
     try:
@@ -2575,24 +2541,24 @@ def call_llm_api(prompt, model=None, max_tokens=2000, temperature=0.3, image_bas
                 raw_body = resp.read().decode("utf-8")
                 msg = json.loads(raw_body)["choices"][0]["message"]
                 c = msg.get("content")
-                # 修复: content 可能是空列表 []（MiMo 思维链特征）
+                # 只展示最终回答。若 provider 把内容放进 reasoning_content，则视为无可展示答案。
                 raw_full = c if isinstance(c, str) and c != "" else ""
-                used_reasoning = False
-                if not raw_full:
-                    raw_full = msg.get("reasoning_content") or ""
-                    used_reasoning = bool(raw_full)
                 # 记录原始响应信息
                 log_entry["raw_content_len"] = len(c) if isinstance(c, str) else (len(c) if isinstance(c, list) else 0)
                 log_entry["raw_reasoning_len"] = len(msg.get("reasoning_content") or "")
                 log_entry["raw_full_len"] = len(raw_full)
                 log_entry["raw_preview"] = raw_full[:300]
-                log_entry["used_reasoning"] = used_reasoning
                 if attempt > 0:
                     log_entry["retry_attempt"] = attempt
                 # 清洗
-                cleaned = _clean_mimo_output(raw_full, prompt, used_reasoning=used_reasoning)
+                cleaned = _clean_mimo_output(raw_full, prompt, used_reasoning=False)
                 log_entry["cleaned_len"] = len(cleaned)
                 log_entry["cleaned_preview"] = cleaned[:300]
+                if not cleaned.strip():
+                    last_error = RuntimeError("大模型返回了空答案")
+                    if attempt < max_retries - 1:
+                        continue
+                    raise last_error
                 log_entry["elapsed_ms"] = int((datetime.now() - t0).total_seconds() * 1000)
                 log_entry["status"] = "ok"
                 _append_debug_log(log_entry)
@@ -2780,13 +2746,7 @@ def call_llm_stream(prompt, model="mimo-v2.5", max_tokens=800, system_prompt="")
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
-    data = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-        "stream": True,
-    }
+    data = _build_llm_payload(messages, model=model, max_tokens=max_tokens, temperature=0.3, stream=True)
     req = urllib.request.Request(
         API_BASE + "/chat/completions",
         data=json.dumps(data).encode("utf-8"),
@@ -3817,6 +3777,8 @@ def run_pipeline(query, results, model_name, img_data=None):
                             yield {"type": "token", "content": delta}
                     except json.JSONDecodeError:
                         pass
+        if not raw_full.strip():
+            raise RuntimeError("流式响应没有可展示的答案")
         result = parse_multi_output(raw_full)
         result["_raw_debug"] = raw_full[:500]
         result["qtype"] = "math"
@@ -3830,8 +3792,9 @@ def run_pipeline(query, results, model_name, img_data=None):
             with urllib.request.urlopen(req, timeout=180) as resp:
                 msg = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']
                 raw_full = extract_final_message_content(msg)
-                if raw_full:
-                    yield {"type": "token", "content": raw_full}
+                if not raw_full.strip():
+                    raise RuntimeError("大模型返回了空答案")
+                yield {"type": "token", "content": raw_full}
             result = parse_multi_output(raw_full)
             result["_raw_debug"] = raw_full[:500]
             result["qtype"] = "math"
@@ -4399,7 +4362,9 @@ with st.sidebar:
         if current_page == p:
             st.markdown(f'<div class="nav-item nav-item-active" data-nav="{p}"><span class="nav-dot"></span>{label}</div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<a class="nav-link" data-page="{p}" href="?page={p}"><span class="nav-dot"></span>{label}</a>', unsafe_allow_html=True)
+            if st.button(label, key=f"nav_{p}", use_container_width=True):
+                st.session_state.page = p
+                st.rerun()
 
     # 导航分组 2: 辅助工具
     st.markdown('<div class="sidebar-section-label">辅助工具</div>', unsafe_allow_html=True)
@@ -4413,7 +4378,9 @@ with st.sidebar:
         if current_page == p:
             st.markdown(f'<div class="nav-item nav-item-active" data-nav="{p}"><span class="nav-dot"></span>{label}</div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<a class="nav-link" data-page="{p}" href="?page={p}"><span class="nav-dot"></span>{label}</a>', unsafe_allow_html=True)
+            if st.button(label, key=f"nav_{p}", use_container_width=True):
+                st.session_state.page = p
+                st.rerun()
 
     st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
 
@@ -4445,6 +4412,7 @@ with st.sidebar:
     if st.button("退出登录", key="sidebar_logout", use_container_width=True):
         clear_login_token(st.session_state.get("user_id", 0))
         cookie_manager.delete("auth_token")
+        kb.clear_professional_session_state()
         st.session_state.logged_in = False
         st.session_state.user_id = None
         st.session_state.page = "hub"
@@ -5356,6 +5324,9 @@ if st.session_state.page == "main":
     st.stop()
 
 # ==================== Hub 主界面 ====================
+if st.session_state.page == "main":
+    st.stop()
+
 if st.session_state.page == "hub":
 
     # ══════════════════════════════════════
@@ -5446,22 +5417,22 @@ if st.session_state.page == "hub":
         with col:
             tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
             st.markdown(f"""
-            <a class="feature-card-link" href="?page={target}" aria-label="进入{title}">
             <div class="feature-card">
                 <div class="card-icon {icon_cls}">{icon_svg}</div>
                 <div class="card-title">{title}</div>
                 <div class="card-desc">{desc}</div>
                 {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
             </div>
-            </a>
             """, unsafe_allow_html=True)
+            if st.button(f"进入{title}", key=f"hub_{key}", use_container_width=True):
+                st.session_state.page = target
+                st.rerun()
 
     # ── Row 3: 2 Wide Cards ──
     wc1, wc2 = st.columns(2)
 
     with wc1:
         st.markdown("""
-        <a class="feature-card-link" href="?page=material" aria-label="进入学习资料生成">
         <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
             <div class="card-icon icon-mat" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
             <div style="flex:1;">
@@ -5472,12 +5443,13 @@ if st.session_state.page == "hub":
                 </div>
             </div>
         </div>
-        </a>
         """, unsafe_allow_html=True)
+        if st.button("进入学习资料生成", key="hub_material", use_container_width=True):
+            st.session_state.page = "material"
+            st.rerun()
 
     with wc2:
         st.markdown("""
-        <a class="feature-card-link" href="?page=checkin" aria-label="进入打卡督学">
         <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
             <div class="card-icon icon-ck" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
             <div style="flex:1;">
@@ -5488,8 +5460,10 @@ if st.session_state.page == "hub":
                 </div>
             </div>
         </div>
-        </a>
         """, unsafe_allow_html=True)
+        if st.button("进入打卡督学", key="hub_checkin", use_container_width=True):
+            st.session_state.page = "checkin"
+            st.rerun()
 
     st.stop()
 
@@ -6296,10 +6270,6 @@ if st.session_state.page == "wrongbook":
         _wb_result = {"ok": False, "error": _action_error}
     _wb_runtime = (
         "<script>"
-        f"var WB_API_BASE={json.dumps(API_BASE)};"
-        f"var WB_API_KEY={json.dumps(API_KEY)};"
-        f"var WB_USER_ID={json.dumps(uid)};"
-        "var WB_SAVE_PORT=0;"
         f"var WB_SAVE_RESULT={json.dumps(_wb_result, ensure_ascii=False)};"
         "</script>"
     )
@@ -6353,11 +6323,8 @@ if st.session_state.page == "wrongbook":
         real_data_js = f"const wrongQuestionsRaw = {_json.dumps(data_js, ensure_ascii=False)};"
         html_content = html_content[:dummy_start] + real_data_js + html_content[dummy_end:]
 
-    # 注入 API 配置，供 iframe 内 JS 直接调用 AI（绕过 textarea 桥接）
-    _wb_save_port = _start_wb_save_server()
-    html_content = html_content.replace("/*__API_CONFIG__*/",
-        f'var WB_API_BASE={_json.dumps(API_BASE)};var WB_API_KEY={_json.dumps(API_KEY)};'
-        f'var WB_SAVE_PORT={_wb_save_port or "null"};var WB_USER_ID={uid or 0};')
+    # AI/OCR/保存都通过当前 Streamlit 会话桥接，浏览器端不接收密钥或可信用户 ID。
+    html_content = html_content.replace("/*__API_CONFIG__*/", "")
 
     # Inject AI result, extracted text & save status
     if _ai_result:
