@@ -91,14 +91,23 @@ class MaterialRepositoryTests(unittest.TestCase):
             confidence=0.98,
         )
 
-        material = save_extraction_result(self.conn, material["id"], result)
+        material = save_extraction_result(
+            self.conn,
+            material["id"],
+            result,
+            user_id=7,
+        )
         material = save_confirmed_text(
-            self.conn, material["id"], "栈是只允许在一端操作的线性表。"
+            self.conn,
+            material["id"],
+            "栈是只允许在一端操作的线性表。",
+            user_id=7,
         )
         material = save_workflow_snapshot(
             self.conn,
             material["id"],
             {"step": "draft_review", "draft_ids": ["draft-1"]},
+            user_id=7,
             status="draft_ready",
         )
 
@@ -110,8 +119,23 @@ class MaterialRepositoryTests(unittest.TestCase):
         )
         self.assertEqual([item["id"] for item in resumable], [material["id"]])
 
-        mark_material_status(self.conn, material["id"], "done")
+        mark_material_status(self.conn, material["id"], "done", user_id=7)
         self.assertEqual(list_resumable_materials(self.conn, 7), [])
+
+    def test_material_updates_check_owner(self):
+        material = create_material(self.conn, user_id=7, filename="owner.txt")
+
+        mark_material_status(
+            self.conn,
+            material["id"],
+            "done",
+            user_id=8,
+        )
+        self.conn.commit()
+
+        unchanged = get_material(self.conn, material["id"], user_id=7)
+        self.assertNotEqual(unchanged["processing_status"], "done")
+        self.assertEqual(get_material(self.conn, material["id"], user_id=8), {})
 
     def test_malformed_json_is_returned_as_empty_dict(self):
         material = create_material(self.conn, user_id=1, filename="broken.txt")

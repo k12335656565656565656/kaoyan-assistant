@@ -20,6 +20,11 @@ NOISE_TOKENS = (
     "各个学校计算机考研/软件考研真题",
     "cskaoyan",
     "科大知博书店",
+    "研池大叔",
+    "弘毅考研",
+    "创梦资料",
+    "后续更新关注公众号",
+    "永久联系微信",
 )
 
 INLINE_NOISE_PATTERNS = (
@@ -45,6 +50,8 @@ PROMOTIONAL_LINE_PATTERNS = (
     re.compile(r"(免费分享|扫码咨询|领取资料|考研资讯|复试资料)", re.IGNORECASE),
     re.compile(r"github\.com/csseky/cskaoyan", re.IGNORECASE),
     re.compile(r"微信公众号.{0,20}计算机与软件考研", re.IGNORECASE),
+    re.compile(r"(研池大叔|弘毅考研|创梦资料)", re.IGNORECASE),
+    re.compile(r"后续更新关注公众号.*永久联系微信", re.IGNORECASE),
 )
 
 QUESTION_CONTEXT_HINTS = (

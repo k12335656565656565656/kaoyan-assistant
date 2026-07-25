@@ -2,6 +2,7 @@ from pathlib import Path
 import re
 
 from schemas.material_schema import MaterialResult
+from services.docx_text_service import extract_docx_text
 from services.material_cleaner import MaterialCleanResult, clean_material_for_extraction
 from services.pdf_text_service import extract_pdf_text, inspect_pdf_for_ocr
 from services.pdf_outline_service import extract_syllabus_outline, looks_like_exam_syllabus
@@ -94,6 +95,30 @@ def route_material_input(
             confidence=0.95 if clean_result.cleaned_text else 0.0,
             warnings=warnings,
             clean_result=clean_result,
+        )
+
+    if suffix == ".docx":
+        if Path(file_name or "").name.startswith("~$"):
+            raise ValueError("这是 Word 自动生成的临时文件，请选择不以“~$”开头的原文档。")
+        raw_text, docx_report = extract_docx_text(file_bytes=file_bytes, file_path=file_path)
+        clean_result = _prepare_extraction_text(raw_text)
+        warnings = [
+            (
+                "已提取 Word 文档："
+                f"{docx_report['paragraph_count']} 个段落、"
+                f"{docx_report['table_row_count']} 行表格"
+            )
+        ] + list(clean_result.warnings)
+        if len(clean_result.cleaned_text) < 80:
+            warnings.append("Word 文档文字较短，请确认内容完整")
+        return _build_material_result(
+            source_type="docx",
+            process_method="docx_text_extract",
+            raw_text=raw_text,
+            confidence=0.97 if clean_result.cleaned_text else 0.0,
+            warnings=warnings,
+            clean_result=clean_result,
+            ocr_report=docx_report,
         )
 
     if suffix == ".pdf" and file_path:

@@ -11,6 +11,20 @@ from typing import Callable
 from services.paddle_ocr_service import extract_text_from_image_bytes
 
 
+_OCR_PROMOTIONAL_MARKERS = (
+    "公众号",
+    "扫码",
+    "二维码",
+    "免费分享",
+    "领取资料",
+    "研池大叔",
+    "弘毅考研",
+    "创梦资料",
+    "永久联系微信",
+    "github.com/csseky",
+)
+
+
 @dataclass
 class OCRTextResult:
     text: str
@@ -318,9 +332,15 @@ def _remove_repeated_page_lines(page_lines: list[list[str]]) -> tuple[list[list[
         cleaned = []
         for line in lines:
             normalized = re.sub(r"\s+", "", line).lower()
-            if normalized in repeated:
+            if normalized in repeated or _is_ocr_promotional_line(normalized):
                 removed_count += 1
                 continue
             cleaned.append(line)
         cleaned_pages.append(cleaned)
     return cleaned_pages, removed_count
+
+
+def _is_ocr_promotional_line(normalized_line: str) -> bool:
+    if not normalized_line:
+        return False
+    return any(marker.lower() in normalized_line for marker in _OCR_PROMOTIONAL_MARKERS)

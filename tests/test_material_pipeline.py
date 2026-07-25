@@ -1,7 +1,10 @@
 import sys
 import unittest
 import re
+from io import BytesIO
 from pathlib import Path
+
+from docx import Document
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -274,6 +277,48 @@ A. 生产者发送后立即返回
             )
             self.assertEqual(result.process_method, "image_ocr")
             self.assertIn("函数极限", result.extracted_text)
+
+        buffer = BytesIO()
+        document = Document()
+        document.add_heading("中国近现代史", level=1)
+        document.add_paragraph("鸦片战争是中国近代史的重要开端。")
+        document.add_paragraph("洋务运动兴办近代工业。", style="List Bullet")
+        table = document.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "时间"
+        table.cell(0, 1).text = "事件"
+        table.cell(1, 0).text = "1840年"
+        table.cell(1, 1).text = "鸦片战争"
+        document.save(buffer)
+
+        result = route_material_input(
+            file_name="中国近现代史.docx",
+            file_bytes=buffer.getvalue(),
+        )
+        self.assertEqual(result.source_type, "docx")
+        self.assertEqual(result.process_method, "docx_text_extract")
+        self.assertIn("【1级标题】中国近现代史", result.extracted_text)
+        self.assertIn("- 洋务运动兴办近代工业。", result.extracted_text)
+        self.assertIn("1840年 | 鸦片战争", result.extracted_text)
+        self.assertEqual(result.ocr_report.get("table_row_count"), 2)
+
+    def test_invalid_docx_is_rejected_with_actionable_message(self):
+        with self.assertRaisesRegex(ValueError, "另存为"):
+            route_material_input(
+                file_name="损坏资料.docx",
+                file_bytes=b"not-a-docx",
+            )
+
+    def test_docx_material_result_round_trips_without_type_loss(self):
+        restored = MaterialResult.from_dict(
+            {
+                "source_type": "docx",
+                "process_method": "docx_text_extract",
+                "extracted_text": "第一章 中国古代史",
+                "confidence": 0.97,
+            }
+        )
+        self.assertEqual(restored.source_type, "docx")
+        self.assertEqual(restored.process_method, "docx_text_extract")
 
     def test_cleaner_splits_fullwidth_question_numbers_and_keeps_other_pages(self):
         raw_text = """

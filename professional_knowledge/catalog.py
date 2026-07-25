@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from professional_knowledge.builtin_registry import canonical_fixed_subject
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SUBJECTS_CONFIG_PATH = Path(__file__).with_name("default_subjects.json")
@@ -31,6 +33,7 @@ _CATALOG_FIELDS = (
     "source_strategy",
     "notes",
     "enabled",
+    "fixed",
 )
 
 
@@ -46,6 +49,7 @@ class RagKnowledgeBaseProfile:
     source_strategy: str = ""
     notes: str = ""
     enabled: bool = False
+    fixed: bool = False
     max_points: int = 12
     extraction_guidance: str = ""
     exam_subjects: list[str] = field(default_factory=list)
@@ -140,6 +144,9 @@ def _normalize_subject_profile(raw_profile: Mapping[str, Any]) -> dict[str, Any]
     enabled = catalog_raw.get("enabled", False)
     if not isinstance(enabled, bool):
         raise ValueError("catalog.enabled 必须是布尔值。")
+    fixed = catalog_raw.get("fixed", False)
+    if not isinstance(fixed, bool):
+        raise ValueError("catalog.fixed 必须是布尔值。")
 
     max_points = profile.get("max_points", 12)
     if isinstance(max_points, bool) or not isinstance(max_points, int) or not 1 <= max_points <= 100:
@@ -181,6 +188,7 @@ def _normalize_subject_profile(raw_profile: Mapping[str, Any]) -> dict[str, Any]
         ),
         "notes": _optional_string(catalog_raw.get("notes"), "catalog.notes"),
         "enabled": enabled,
+        "fixed": fixed,
     }
     return {
         "key": key,
@@ -214,16 +222,31 @@ def list_subject_profiles(
 
     profiles = list_default_subject_profiles()
     positions = {profile["key"]: index for index, profile in enumerate(profiles)}
+    fixed_keys = {
+        profile["key"] for profile in profiles if profile["catalog"].get("fixed")
+    }
+    fixed_labels = {
+        canonical_fixed_subject(profile["catalog"]["subject_label"])
+        or profile["catalog"]["subject_label"]
+        for profile in profiles
+        if profile["catalog"].get("fixed")
+    }
     custom_path = Path(custom_config_path) if custom_config_path is not None else CUSTOM_SUBJECTS_CONFIG_PATH
 
     for raw_profile in _read_config(custom_path, tolerate_errors=True):
         key = _profile_key(raw_profile)
         if key is None:
             continue
+        if key in fixed_keys:
+            continue
         base = profiles[positions[key]] if key in positions else None
         try:
             normalized = _normalize_subject_profile(_merge_profile(base, raw_profile))
         except (TypeError, ValueError):
+            continue
+        normalized_label = normalized["catalog"]["subject_label"]
+        canonical_label = canonical_fixed_subject(normalized_label) or normalized_label
+        if canonical_label in fixed_labels:
             continue
         if key in positions:
             profiles[positions[key]] = normalized
@@ -256,10 +279,23 @@ def _to_rag_profile(profile: Mapping[str, Any]) -> RagKnowledgeBaseProfile:
         source_strategy=catalog["source_strategy"],
         notes=catalog["notes"],
         enabled=catalog["enabled"],
+        fixed=catalog.get("fixed", False),
         max_points=profile["max_points"],
         extraction_guidance=profile["extraction_guidance"],
         exam_subjects=list(profile.get("exam_subjects") or []),
     )
+
+
+def rag_profile_from_mapping(profile: Mapping[str, Any]) -> RagKnowledgeBaseProfile:
+    """Validate a complete profile loaded from a user-scoped repository."""
+
+    return _to_rag_profile(_normalize_subject_profile(profile))
+
+
+def list_builtin_rag_knowledge_bases() -> list[RagKnowledgeBaseProfile]:
+    """Return only deployable bundled profiles, ignoring local override files."""
+
+    return [_to_rag_profile(profile) for profile in list_default_subject_profiles()]
 
 
 # Retained for callers that imported the old module-level constant. Runtime
@@ -306,6 +342,8 @@ def set_subject_enabled(
     profile = get_subject_profile(subject_key, custom_config_path=custom_config_path)
     if profile is None:
         raise ValueError(f"未找到专业课配置：{subject_key}")
+    if profile["catalog"].get("fixed"):
+        raise ValueError("固定专业课不能隐藏或删除。")
     return save_custom_subject_profile(
         {"key": subject_key, "catalog": {"enabled": bool(enabled)}},
         custom_config_path=custom_config_path,
@@ -330,6 +368,25 @@ def save_custom_subject_profile(
 
     path = Path(custom_config_path) if custom_config_path is not None else CUSTOM_SUBJECTS_CONFIG_PATH
     defaults = {item["key"]: item for item in list_default_subject_profiles()}
+    fixed_defaults = {
+        item["key"]: item
+        for item in defaults.values()
+        if item["catalog"].get("fixed")
+    }
+    if key in fixed_defaults:
+        raise ValueError("固定专业课不能被自定义配置覆盖。")
+    proposed_label = ""
+    catalog_payload = profile.get("catalog")
+    if isinstance(catalog_payload, Mapping):
+        proposed_label = str(catalog_payload.get("subject_label") or "").strip()
+    proposed_label = proposed_label or str(profile.get("subject_label") or "").strip()
+    fixed_labels = {
+        canonical_fixed_subject(item["catalog"]["subject_label"])
+        or item["catalog"]["subject_label"]
+        for item in fixed_defaults.values()
+    }
+    if (canonical_fixed_subject(proposed_label) or proposed_label) in fixed_labels:
+        raise ValueError("该名称属于固定专业课，请直接使用系统课程。")
     saved_raw = _read_config(path, tolerate_errors=True)
     saved: list[dict[str, Any]] = []
     saved_by_key: dict[str, dict[str, Any]] = {}

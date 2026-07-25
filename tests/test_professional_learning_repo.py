@@ -121,11 +121,29 @@ class ProfessionalLearningRepoTests(unittest.TestCase):
         self.assertEqual(questions[0]["knowledge_name"], "页式虚拟存储器")
         self.assertEqual(questions[0]["practice_count"], 0)
 
-        mark_saved_question_practiced(self.conn, saved["id"])
+        mark_saved_question_practiced(self.conn, saved["id"], 7)
         self.conn.commit()
         practiced = list_saved_questions(self.conn, 7, "408综合")[0]
         self.assertEqual(practiced["practice_count"], 1)
         self.assertIsNotNone(practiced["last_practiced"])
+
+    def test_mark_saved_question_practiced_checks_owner(self):
+        saved = save_generated_question(
+            self.conn,
+            user_id=7,
+            subject="408综合",
+            knowledge_id=None,
+            question="测试题",
+            reference_answer="参考答案",
+            grading_points=[],
+            source_mode="concept",
+        )
+        mark_saved_question_practiced(self.conn, saved["id"], 8)
+        self.conn.commit()
+
+        practiced = list_saved_questions(self.conn, 7, "408综合")[0]
+        self.assertEqual(practiced["practice_count"], 0)
+        self.assertIsNone(practiced["last_practiced"])
 
     def test_saved_questions_keep_multiple_records_even_for_same_prompt(self):
         for _ in range(2):
