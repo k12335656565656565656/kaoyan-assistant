@@ -7,7 +7,7 @@ import sqlite3
 from collections import defaultdict
 from typing import Any
 
-from professional_knowledge.builtin_408 import ensure_builtin_408_points
+from professional_knowledge.builtin_registry import ensure_builtin_subject_points
 from repositories.knowledge_repo import list_user_knowledge_points
 from repositories.material_repo import ensure_material_schema
 from repositories.professional_syllabus_repo import (
@@ -283,7 +283,7 @@ def run_syllabus_analysis_job(db_path: str, analysis_id: int) -> None:
         user_id = int(analysis["user_id"])
         subject = analysis["subject"]
         source_ids = analysis.get("source_ids") or []
-        ensure_builtin_408_points(conn, user_id, subject)
+        ensure_builtin_subject_points(conn, user_id, subject)
         source_rows = _source_rows(conn, user_id, subject, source_ids)
         text = _source_text(source_rows)
         if not text.strip():

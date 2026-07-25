@@ -6,6 +6,10 @@ data/config/custom_subjects.json
 data/tasks/
 data/test_materials/
 
+# 本地或授权知识资产（公开仓库只保存生成器和结构化范式）
+professional_knowledge/builtin_history_points.json
+reports/true_exam_audit*.json
+
 # 环境变量
 .env
 

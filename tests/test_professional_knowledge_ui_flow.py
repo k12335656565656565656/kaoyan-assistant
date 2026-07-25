@@ -9,6 +9,7 @@ from pathlib import Path
 
 from docx import Document
 from streamlit.testing.v1 import AppTest
+from repositories.user_subject_repo import save_user_subject_profile
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -28,9 +29,13 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.original_memory_db_env = os.environ.get("MEMORY_DB")
         self.original_api_key_env = os.environ.get("AI_API_KEY")
         self.original_standalone_user_env = os.environ.get("KAOYAN_STANDALONE_USER_ID")
+        self.original_question_review_env = os.environ.get(
+            "PROFESSIONAL_QUESTION_REVIEW_ENABLED"
+        )
         os.environ["MEMORY_DB"] = str(self.db_path)
         os.environ["AI_API_KEY"] = ""
         os.environ["KAOYAN_STANDALONE_USER_ID"] = "1"
+        os.environ["PROFESSIONAL_QUESTION_REVIEW_ENABLED"] = "0"
 
         import knowledge_base
         import professional_knowledge.catalog as catalog
@@ -72,6 +77,12 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             os.environ.pop("KAOYAN_STANDALONE_USER_ID", None)
         else:
             os.environ["KAOYAN_STANDALONE_USER_ID"] = self.original_standalone_user_env
+        if self.original_question_review_env is None:
+            os.environ.pop("PROFESSIONAL_QUESTION_REVIEW_ENABLED", None)
+        else:
+            os.environ[
+                "PROFESSIONAL_QUESTION_REVIEW_ENABLED"
+            ] = self.original_question_review_env
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _run_app(self):
@@ -79,6 +90,163 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         if app.exception:
             raise AssertionError(app.exception)
         return app
+
+    def test_question_mode_labels_follow_history_subject(self):
+        self.assertEqual(
+            self.knowledge_base._question_mode_label(
+                "algorithm",
+                history_mode=True,
+            ),
+            "论述题",
+        )
+        self.assertEqual(
+            self.knowledge_base._question_mode_label(
+                "application",
+                history_mode=True,
+            ),
+            "史料题",
+        )
+        self.assertEqual(
+            self.knowledge_base._question_mode_label(
+                "concept",
+                history_mode=True,
+            ),
+            "名词解释",
+        )
+        point = {
+            "knowledge_name": "三国鼎立",
+            "subject": "历史学统考",
+        }
+        fallback = self.knowledge_base._curated_history_essay_fallback(point)
+        self.assertTrue(
+            self.knowledge_base._is_valid_professional_question_for_point(
+                fallback,
+                "algorithm",
+                point,
+            )
+        )
+
+    def test_history_blank_and_essay_use_valid_local_fallbacks(self):
+        point = {
+            "knowledge_name": "东晋",
+            "subject": "历史学统考",
+            "chapter_name": "中国古代史",
+            "core_definition": (
+                "东晋建立于317年，统治中心位于江南。北方人口南迁促进了江南开发，"
+                "门阀政治也深刻影响了东晋政局。"
+            ),
+        }
+
+        blank = self.knowledge_base._history_question_fallback(point, "blank")
+        essay = self.knowledge_base._history_question_fallback(point, "algorithm")
+
+        self.assertTrue(
+            self.knowledge_base._is_valid_professional_question_for_point(
+                blank,
+                "blank",
+                point,
+            )
+        )
+        self.assertTrue(
+            self.knowledge_base._is_valid_professional_question_for_point(
+                essay,
+                "algorithm",
+                point,
+            )
+        )
+
+    def test_invalid_history_ai_output_falls_back_instead_of_becoming_unavailable(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        os.environ["PROFESSIONAL_QUESTION_REVIEW_ENABLED"] = "0"
+        self.knowledge_base._call_llm_api = lambda *_args, **_kwargs: "{}"
+        point = {
+            "knowledge_name": "东晋",
+            "subject": "历史学统考",
+            "chapter_name": "中国古代史",
+            "core_definition": (
+                "东晋建立于317年，统治中心位于江南。北方人口南迁促进了江南开发，"
+                "门阀政治也深刻影响了东晋政局。"
+            ),
+        }
+
+        blank, blank_warning = self.knowledge_base._generate_professional_question_with_ai(
+            point,
+            "blank",
+            variant=1,
+            allow_fallback=False,
+        )
+        essay, essay_warning = self.knowledge_base._generate_professional_question_with_ai(
+            point,
+            "algorithm",
+            variant=1,
+            allow_fallback=False,
+        )
+
+        self.assertFalse(blank.get("generation_failed"))
+        self.assertFalse(essay.get("generation_failed"))
+        self.assertEqual(blank_warning, "")
+        self.assertEqual(essay_warning, "")
+
+    def test_history_blank_and_essay_remain_available_without_api(self):
+        os.environ.pop("AI_API_KEY", None)
+        point = {
+            "knowledge_name": "东晋",
+            "subject": "历史学统考",
+            "chapter_name": "中国古代史",
+            "core_definition": (
+                "东晋建立于317年，统治中心位于江南。北方人口南迁促进了江南开发，"
+                "门阀政治也深刻影响了东晋政局。"
+            ),
+        }
+
+        blank, blank_warning = self.knowledge_base._generate_professional_question_with_ai(
+            point,
+            "blank",
+            variant=1,
+            allow_fallback=False,
+        )
+        essay, essay_warning = self.knowledge_base._generate_professional_question_with_ai(
+            point,
+            "algorithm",
+            variant=1,
+            allow_fallback=False,
+        )
+
+        self.assertFalse(blank.get("generation_failed"))
+        self.assertFalse(essay.get("generation_failed"))
+        self.assertEqual(blank_warning, "")
+        self.assertEqual(essay_warning, "")
+
+    def test_history_blank_and_essay_remain_available_on_api_error(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        self.knowledge_base._call_llm_api = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("temporary API failure")
+        )
+        point = {
+            "knowledge_name": "东晋",
+            "subject": "历史学统考",
+            "chapter_name": "中国古代史",
+            "core_definition": (
+                "东晋建立于317年，统治中心位于江南。北方人口南迁促进了江南开发，"
+                "门阀政治也深刻影响了东晋政局。"
+            ),
+        }
+
+        blank, _ = self.knowledge_base._generate_professional_question_with_ai(
+            point,
+            "blank",
+            variant=1,
+            allow_fallback=False,
+        )
+        essay, _ = self.knowledge_base._generate_professional_question_with_ai(
+            point,
+            "algorithm",
+            variant=1,
+            allow_fallback=False,
+        )
+
+        self.assertFalse(blank.get("generation_failed"))
+        self.assertFalse(essay.get("generation_failed"))
 
     def _seed_knowledge(self, subject, name):
         with sqlite3.connect(self.db_path) as conn:
@@ -100,6 +268,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
 
     def _enable_fake_professional_ai(self):
         os.environ["AI_API_KEY"] = "test-key"
+        os.environ["PROFESSIONAL_QUESTION_REVIEW_ENABLED"] = "0"
         calls = {"question": 0, "grade": 0}
 
         def fake_llm(prompt, **kwargs):
@@ -109,21 +278,16 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
                     '{"score":82,"feedback":"要点基本正确，继续补充边界条件。",'
                     '"rating":"good","missed_points":["边界条件"],'
                     '"mistake_reason":"过程说明还可以更完整。",'
+                    '"standard_answer":"先给出核心结论，再说明适用条件和关键步骤。",'
+                    '"corrected_answer":"结论正确，并补充适用条件、关键步骤与边界情况。",'
+                    '"score_breakdown":[{"point":"核心结论","score":45,"max_score":50,"comment":"结论正确。"},'
+                    '{"point":"过程与条件","score":37,"max_score":50,"comment":"缺少边界条件。"}],'
                     '"next_review":"复习对应知识点的适用条件。",'
                     '"similar_question":"换一组条件再做一题。"}'
                 )
             calls["question"] += 1
             suffix = calls["question"]
-            if "单选题" in prompt or "choice" in prompt:
-                return (
-                    '{"question_type":"choice",'
-                    f'"question":"某 AOV 网边集为 A->C、B->C、C->D，第 {suffix} 次生成。下列说法哪一项正确？",'
-                    '"options":["A. C 可以排在 A 前面","B. A 和 B 都必须排在 C 前面","C. D 必须排在 C 前面","D. 图中一定存在环"],'
-                    '"correct_answer":"B","reference_answer":"A、B 均为 C 的前驱，C 又先于 D。",'
-                    '"grading_points":["入度约束","拓扑序列","有向无环图"],'
-                    '"similar_question":"换一组先修关系再判断。"}'
-                )
-            if "填空题" in prompt or "blank" in prompt:
+            if "生成一道知识点扣空填空题" in prompt or "题型：blank" in prompt:
                 return (
                     '{"question_type":"blank",'
                     f'"question":"填空：对 AOV 网做拓扑排序时，第 {suffix} 次生成，应优先选择入度为 ______ 的顶点。",'
@@ -132,7 +296,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
                     '"grading_points":["入度为0","前驱活动完成"],'
                     '"similar_question":"换一张图写出第一轮可选顶点。"}'
                 )
-            if "概念辨析题" in prompt or "concept" in prompt:
+            if "生成一道概念辨析题" in prompt or "题型：concept" in prompt:
                 return (
                     '{"question_type":"concept",'
                     f'"question":"请用自己的话解释 AOV 网与拓扑排序的关系，并说明第 {suffix} 次生成时如何判断有向环。",'
@@ -140,6 +304,15 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
                     '"reference_answer":"AOV 网用顶点表示活动、边表示先后关系；拓扑排序通过反复选择入度为 0 的顶点判断是否存在环。",'
                     '"grading_points":["活动顶点","先后关系","入度为0","有向环"],'
                     '"similar_question":"解释 AOE 网和 AOV 网的区别。"}'
+                )
+            if "风格单选题" in prompt or "题型：choice" in prompt:
+                return (
+                    '{"question_type":"choice",'
+                    f'"question":"某 AOV 网边集为 A->C、B->C、C->D，第 {suffix} 次生成。下列说法哪一项正确？",'
+                    '"options":["A. C 可以排在 A 前面","B. A 和 B 都必须排在 C 前面","C. D 必须排在 C 前面","D. 图中一定存在环"],'
+                    '"correct_answer":"B","reference_answer":"A、B 均为 C 的前驱，C 又先于 D。",'
+                    '"grading_points":["入度约束","拓扑序列","有向无环图"],'
+                    '"similar_question":"换一组先修关系再判断。"}'
                 )
             return (
                 '{"question_type":"application",'
@@ -260,6 +433,24 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
     def test_syllabus_sources_are_detected_separately(self):
         self.assertTrue(self.knowledge_base._is_syllabus_source({"chapter_name": "学校考纲 - 408大纲.pdf"}))
         self.assertFalse(self.knowledge_base._is_syllabus_source({"chapter_name": "数据结构讲义"}))
+
+    def test_history_outline_is_vertical_and_hides_removed_sections(self):
+        rendered = self.knowledge_base._history_study_outline_html(
+            "**1. 历史定位** 三国时期 "
+            "**2. 核心要点** "
+            "**2.1 政治** 1. **制度变化**：中央集权加强 "
+            "3. 常见考法 4. 易错提醒 5. 掌握标准 6. 关联知识"
+        )
+
+        self.assertIn("pk-history-outline", rendered)
+        self.assertLess(rendered.index(">1<"), rendered.index(">2<"))
+        self.assertLess(rendered.index(">2<"), rendered.index(">2.1<"))
+        self.assertLess(rendered.index(">2.1<"), rendered.index("制度变化"))
+        self.assertNotIn("常见考法", rendered)
+        self.assertNotIn("易错提醒", rendered)
+        self.assertNotIn("掌握标准", rendered)
+        self.assertNotIn("关联知识", rendered)
+        self.assertNotIn("**", rendered)
 
     def test_408_builtin_chat_answers_without_uploaded_sources(self):
         answer = self.knowledge_base._answer_subject_question(
@@ -408,10 +599,10 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             return (
                 '{"score":76,"rating":"good","feedback":"过程基本对，但缺少复杂度分析。",'
                 '"standard_answer":"应先写地址字段划分，再说明查找流程。",'
-                '"score_breakdown":[{"point":"字段划分","score":30,"max_score":40,"comment":"写出了组号和块内地址，但标记位说明不完整。"}],'
+                '"score_breakdown":[{"point":"字段划分","score":30,"max_score":40,"comment":"写出了组号和块内地址，但标记位说明不完整。"},'
+                '{"point":"过程与代价","score":46,"max_score":60,"comment":"流程基本正确，但缺少代价分析。"}],'
                 '"missed_points":["标记位位数","复杂度/代价分析"],'
                 '"mistake_reason":"只写结论，没有把地址位数和组数对应起来。",'
-                '"corrected_answer":"地址分为标记、组号、块内地址三部分，并按组号定位。",'
                 '"next_review":"复习 Cache 组相联映射的地址字段划分。",'
                 '"similar_question":"给定 Cache 参数，重新划分主存地址字段。"}'
             )
@@ -431,10 +622,11 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertIn("得分点", captured["prompt"])
         self.assertIn("标准答案", captured["prompt"])
         self.assertIn("学生回答", captured["prompt"])
+        self.assertNotIn('"corrected_answer"', captured["prompt"])
         self.assertGreaterEqual(captured["max_tokens"], 1200)
         self.assertEqual(result["score"], 76)
         self.assertEqual(result["standard_answer"], "应先写地址字段划分，再说明查找流程。")
-        self.assertEqual(result["corrected_answer"], "地址分为标记、组号、块内地址三部分，并按组号定位。")
+        self.assertNotIn("corrected_answer", result)
         self.assertEqual(result["score_breakdown"][0]["point"], "字段划分")
         self.assertEqual(result["grading_source"], "ai")
         self.assertTrue(result["is_authoritative"])
@@ -451,6 +643,26 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             "利用局部性加快访问。",
             "利用局部性减少平均访存时间。",
             ["局部性", "平均访存时间"],
+            "application",
+            use_ai=True,
+        )
+
+        self.assertEqual(result["grading_source"], "local_estimate")
+        self.assertFalse(result["is_authoritative"])
+        self.assertIn("不计入正式学习进度", result["grading_warning"])
+
+    def test_incomplete_ai_grading_is_not_recorded_as_authoritative(self):
+        os.environ["AI_API_KEY"] = "test-key"
+        self.knowledge_base._call_llm_api = lambda *args, **kwargs: (
+            '{"score":90,"rating":"easy","feedback":"回答正确。"}'
+        )
+
+        result = self.knowledge_base._grade_professional_answer(
+            {"knowledge_name": "洋务运动", "core_definition": "晚清自强、求富运动。"},
+            "简述洋务运动的背景、主要内容和影响。",
+            "洋务运动学习西方技术。",
+            "需说明背景、代表人物、实践与历史影响。",
+            ["背景", "代表人物", "主要实践", "影响"],
             "application",
             use_ai=True,
         )
@@ -611,7 +823,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertIn("AI 返回的题干或参考答案不完整", generated.get("generation_warning", ""))
         self.assertNotIn("填空：做“哈夫曼树与哈夫曼编码”相关题时", generated["question"])
 
-    def test_truncated_ai_question_json_can_still_be_used(self):
+    def test_truncated_ai_question_without_grading_points_is_rejected(self):
         os.environ["AI_API_KEY"] = "test-key"
         self.knowledge_base._call_llm_api = lambda *args, **kwargs: (
             '```json\n{"question_type":"application",'
@@ -628,9 +840,8 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
 
         generated = self.knowledge_base._generate_professional_question(point, "application", variant=4)
 
-        self.assertFalse(generated.get("generation_failed"))
-        self.assertIn("权值", generated["question"])
-        self.assertIn("带权路径长度", generated["reference_answer"])
+        self.assertTrue(generated.get("generation_failed"))
+        self.assertIn("题干或参考答案不完整", generated.get("generation_warning", ""))
 
     def test_ai_question_with_only_question_completes_reference(self):
         os.environ["AI_API_KEY"] = "test-key"
@@ -909,8 +1120,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
 
     def test_formal_knowledge_base_follows_selected_subject(self):
         self._seed_knowledge("408综合", "栈")
-        self.catalog.save_custom_subject_profile(
-            {
+        custom_profile = {
                 "key": "custom_management",
                 "catalog": {
                     "title": "管理学原理",
@@ -927,9 +1137,10 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
                 "max_points": 12,
                 "exam_subjects": ["管理学原理"],
                 "extraction_guidance": "测试。",
-            },
-            custom_config_path=self.catalog.CUSTOM_SUBJECTS_CONFIG_PATH,
-        )
+            }
+        with sqlite3.connect(self.db_path) as conn:
+            save_user_subject_profile(conn, 1, custom_profile)
+            conn.commit()
         self._seed_knowledge("管理学原理", "计划职能")
         app = self._run_app()
         _find_by_label(app.radio, "专业课功能").set_value("高级知识条目管理").run()
@@ -1154,7 +1365,14 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         subject_selector = _find_by_label(app.selectbox, "专业课", occurrence=0)
         self.assertIn("管理学原理", subject_selector.options)
         self.assertEqual(subject_selector.value, "管理学原理")
-        self.assertTrue(self.catalog.CUSTOM_SUBJECTS_CONFIG_PATH.exists())
+        with sqlite3.connect(self.db_path) as conn:
+            saved = conn.execute(
+                """SELECT subject_label, enabled
+                   FROM user_subject_profiles
+                   WHERE user_id=1"""
+            ).fetchall()
+        self.assertEqual(saved, [("管理学原理", 1)])
+        self.assertFalse(self.catalog.CUSTOM_SUBJECTS_CONFIG_PATH.exists())
 
     def test_removed_prompt_panels_are_not_rendered(self):
         app = self._run_app()
@@ -1251,23 +1469,17 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
 
         self.assertEqual(calls, [True])
 
-    def test_configured_subject_can_be_removed_after_confirmation(self):
+    def test_fixed_subjects_are_visible_and_cannot_be_removed(self):
         app = self._run_app()
         subject_selector = _find_by_label(app.selectbox, "专业课")
         self.assertIn("408综合", subject_selector.options)
+        self.assertIn("历史学统考", subject_selector.options)
         self.assertNotIn("医学考研", subject_selector.options)
-
-        _find_by_label(app.button, "删除专业课").click().run()
-        if app.exception:
-            raise AssertionError(app.exception)
-        _find_by_label(app.checkbox, "我确认移除“408综合”").set_value(True)
-        _find_by_label(app.button, "确认删除专业课").click().run()
-        if app.exception:
-            raise AssertionError(app.exception)
-
-        disabled_profile = self.catalog.get_rag_knowledge_base_by_subject("408综合")
-        self.assertIsNotNone(disabled_profile)
-        self.assertFalse(disabled_profile.enabled)
+        self.assertFalse(any(button.label == "删除专业课" for button in app.button))
+        fixed_profile = self.catalog.get_rag_knowledge_base_by_subject("408综合")
+        self.assertIsNotNone(fixed_profile)
+        self.assertTrue(fixed_profile.enabled)
+        self.assertTrue(fixed_profile.fixed)
 
     def test_workbench_upload_is_queued_without_running_synchronous_processing(self):
         started_jobs = []

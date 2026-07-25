@@ -1,95 +1,43 @@
 {
-  "version": 1,
+  "version": 2,
   "subjects": [
     {
       "key": "exam_408",
       "catalog": {
         "title": "408 计算机联考",
         "subject_label": "408综合",
-        "status": "已启用",
-        "stage": "MVP",
-        "summary": "支持 PDF/OCR、知识点抽取、原文引用、复习内容与后续 RAG 扩展。",
-        "capabilities": ["知识点抽取", "原文引用", "复习内容", "后续关系图"],
-        "source_strategy": "PaddleOCR + PDF 文本提取 + 结构化知识点确认",
-        "notes": "当前主通道。后续优先接入 source_chunks、混合检索与关系图谱。",
-        "enabled": true
+        "status": "内置",
+        "stage": "可用",
+        "summary": "覆盖数据结构、计算机组成原理、操作系统和计算机网络。",
+        "capabilities": ["内置知识库", "个人资料补充", "问答", "出题与复习"],
+        "source_strategy": "内置知识库为基底，叠加当前用户上传资料。",
+        "notes": "固定专业课，不可删除。",
+        "enabled": true,
+        "fixed": true
       },
       "local_source": null,
-      "max_points": 12,
+      "max_points": 100,
       "exam_subjects": ["数据结构", "计算机组成原理", "操作系统", "计算机网络"],
-      "extraction_guidance": "优先识别数据结构、计算机组成原理、操作系统和计算机网络中的概念、算法、机制与易错点；每条知识点保留可核对的原文依据。"
+      "extraction_guidance": "从用户上传资料中提取可核对的补充知识，按四门考试科目归类；内置知识库始终保留。"
     },
     {
-      "key": "edu_311",
+      "key": "exam_history_313",
       "catalog": {
-        "title": "311 教育学",
-        "subject_label": "教育学",
-        "status": "预留框架",
-        "stage": "待接入",
-        "summary": "保留教材、真题、教育学理论知识点与复习库接入位。",
-        "capabilities": ["知识点抽取", "教材引用", "题型归纳"],
-        "source_strategy": "待接入 MinerU / OCR / chunk 入库",
-        "notes": "适合作为统一专业课框架的下一批接入对象。",
-        "enabled": false
+        "title": "313 历史学统考",
+        "subject_label": "历史学统考",
+        "status": "内置",
+        "stage": "可用",
+        "summary": "覆盖中国古代史、中国近现代史、世界古代中世纪史和世界近现代史。",
+        "capabilities": ["内置知识库", "个人资料补充", "出题与批改", "问答与复习"],
+        "source_strategy": "审核后的历史知识包为基底，叠加当前用户上传资料。",
+        "notes": "固定专业课，不可删除。",
+        "enabled": true,
+        "fixed": true
       },
       "local_source": null,
-      "max_points": 12,
-      "exam_subjects": ["教育学原理", "中外教育史", "教育心理学", "教育研究方法"],
-      "extraction_guidance": "优先抽取教育学人物、理论、流派、制度、历史脉络和观点比较，并区分教材原文与推断性扩展。"
-    },
-    {
-      "key": "psych_312",
-      "catalog": {
-        "title": "312 心理学",
-        "subject_label": "心理学",
-        "status": "预留框架",
-        "stage": "待接入",
-        "summary": "保留普通心理学、实验心理学、统计测量等专业课资料入口。",
-        "capabilities": ["知识点抽取", "概念关系", "章节复习"],
-        "source_strategy": "待接入 MinerU / OCR / source_chunks",
-        "notes": "后续可重点增强概念图和理论关系图。",
-        "enabled": false
-      },
-      "local_source": null,
-      "max_points": 12,
-      "exam_subjects": ["普通心理学", "发展与教育心理学", "实验心理学", "心理统计与测量"],
-      "extraction_guidance": "优先抽取心理学概念、经典实验、研究方法、统计测量条件及理论之间的区别与联系。"
-    },
-    {
-      "key": "med_integrated",
-      "catalog": {
-        "title": "医学考研",
-        "subject_label": "医学考研",
-        "status": "已隐藏",
-        "stage": "MVP",
-        "summary": "支持 PDF/OCR、知识点抽取、原文引用、复习内容与后续 RAG 扩展。",
-        "capabilities": ["知识点抽取", "原文引用", "复习内容", "后续关系图"],
-        "source_strategy": "PaddleOCR + PDF 文本提取 + 结构化知识点确认",
-        "notes": "复用 408 同款识别与确认链路。默认隐藏，后续需要医学模块时再启用。",
-        "enabled": false
-      },
-      "local_source": null,
-      "max_points": 12,
-      "exam_subjects": ["生理学", "生物化学", "病理学", "内科学", "外科学"],
-      "extraction_guidance": "优先抽取定义、病理生理机制、诊断依据、鉴别要点、治疗原则和易混淆内容；仅保留资料中有依据的结论。"
-    },
-    {
-      "key": "custom_minor_subject",
-      "catalog": {
-        "title": "小众专业课模板",
-        "subject_label": "其他",
-        "status": "可扩展",
-        "stage": "框架已留",
-        "summary": "面向通信、控制、机械、法学、艺术等小众专业课的通用接入模板。",
-        "capabilities": ["可配置学科", "知识点确认", "后续 RAG 接入"],
-        "source_strategy": "统一使用 source_chunks + knowledge_points + learning_state 三层结构",
-        "notes": "后续新增专业课时，优先补配置和 Prompt，不必重写整套页面。",
-        "enabled": false
-      },
-      "local_source": null,
-      "max_points": 12,
-      "exam_subjects": [],
-      "extraction_guidance": "从资料原文中抽取可独立复习的核心概念、原理、方法、条件和易错点；缺乏依据时标记不确定，不补写资料外事实。"
+      "max_points": 100,
+      "exam_subjects": ["中国古代史", "中国近现代史", "世界古代中世纪史", "世界近现代史"],
+      "extraction_guidance": "从用户上传资料中提取人物、事件、制度、思想和历史联系，区分背景、过程、内容、影响与评价。"
     }
   ]
 }
