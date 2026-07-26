@@ -4529,7 +4529,6 @@ if not st.session_state.logged_in:
                     set_authenticated_user({"user_id": uid, "username": username})
                     st.session_state._auth_session_token = token
                     st.success("登录成功！")
-                    st.rerun()
                 else:
                     st.error("用户名或密码错误")
 
@@ -4553,7 +4552,6 @@ if not st.session_state.logged_in:
                         set_authenticated_user({"user_id": uid, "username": new_user})
                         st.session_state._auth_session_token = token
                         st.success(f"注册成功！欢迎 {new_user}")
-                        st.rerun()
                     else:
                         st.error("用户名已存在")
 

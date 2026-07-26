@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from services.auth_cookie import (
     AUTH_SESSION_DAYS,
@@ -58,6 +59,15 @@ class AuthCookieTests(unittest.TestCase):
             select_auth_token("", "session-token"),
             "session-token",
         )
+
+    def test_login_flow_does_not_rerun_before_cookie_component_can_flush(self):
+        app_source = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        login_section = app_source.split("    with tab_login:", 1)[1].split(
+            "    st.stop()", 1
+        )[0]
+
+        self.assertEqual(login_section.count("cookie_manager.set("), 2)
+        self.assertNotIn("st.rerun()", login_section)
 
 
 if __name__ == "__main__":
