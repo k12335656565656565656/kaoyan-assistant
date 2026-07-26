@@ -157,6 +157,86 @@ def split_wrongbook_answer_explanation(correct_answer, explanation=""):
     return match.group(1).strip(), match.group(2).strip()
 
 
+def select_quiz_for_wrongbook(active_quiz=None, preserved_quiz=None):
+    """Choose the newest usable quiz, retaining a scored quiz after active state is cleared."""
+    for quiz in (active_quiz, preserved_quiz):
+        if isinstance(quiz, dict) and str(quiz.get("questions") or "").strip():
+            return quiz
+    return None
+
+
+def build_wrongbook_capture(
+    raw_text,
+    *,
+    fallback_question="",
+    fallback_correct_answer="",
+    fallback_explanation="",
+):
+    """Extract question/options, answer, and explanation from a generated quiz block."""
+    raw = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    question_lines = []
+    option_lines = []
+    answer = ""
+    explanation_lines = []
+    mode = ""
+
+    option_pattern = re.compile(r"^[A-E]\s*(?:[).\u3001]|[:\uff1a])\s*(.*)$", re.I)
+    answer_pattern = re.compile(r"^(?:ANSWER|\u7b54\u6848)\s*[:\uff1a]\s*(.*)$", re.I)
+    explain_pattern = re.compile(r"^(?:EXPLAIN|\u89e3\u6790|\u89e3\u7b54)\s*[:\uff1a]\s*(.*)$", re.I)
+    question_pattern = re.compile(r"^(?:Q|QUESTION|\u95ee\u9898)\s*[:\uff1a]?\s*(.*)$", re.I)
+    question_blocks = [
+        block for block in raw.split("---")
+        if any(question_pattern.match(line.strip()) for line in block.split("\n"))
+    ]
+    if question_blocks:
+        raw = question_blocks[0]
+
+    for raw_line in raw.split("\n"):
+        line = raw_line.strip()
+        if not line or line == "---":
+            continue
+        question_match = question_pattern.match(line)
+        if question_match:
+            mode = "question"
+            if question_match.group(1).strip():
+                question_lines.append(question_match.group(1).strip())
+            continue
+        option_match = option_pattern.match(line)
+        if option_match:
+            mode = "options"
+            label = line[: line.find(option_match.group(1))].strip()
+            option_lines.append(f"{label} {option_match.group(1).strip()}".strip())
+            continue
+        answer_match = answer_pattern.match(line)
+        if answer_match:
+            mode = "answer"
+            answer = answer_match.group(1).strip()
+            continue
+        explain_match = explain_pattern.match(line)
+        if explain_match:
+            mode = "explanation"
+            if explain_match.group(1).strip():
+                explanation_lines.append(explain_match.group(1).strip())
+            continue
+        if mode == "question":
+            question_lines.append(line)
+        elif mode == "explanation":
+            explanation_lines.append(line)
+
+    question = "\n".join(question_lines + option_lines).strip()
+    if not question:
+        question = str(fallback_question or "").strip()
+    if not question and raw.strip():
+        question = raw.strip()
+
+    return {
+        "question": question,
+        "correct_answer": answer or str(fallback_correct_answer or "").strip(),
+        "explanation": "\n".join(explanation_lines).strip()
+        or str(fallback_explanation or "").strip(),
+    }
+
+
 def detect_subject(text):
     tl = (text or "").lower()
     if any(k in tl for k in ["英语", "翻译", "作文", "词汇", "完形", "长难句", "letter", "essay", "reading", "writing"]):

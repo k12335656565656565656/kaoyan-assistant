@@ -72,7 +72,10 @@ from repositories.user_subject_repo import (
     save_user_subject_profile,
     set_user_subject_enabled,
 )
-from repositories.wrong_question_repo import count_user_wrong_questions
+from repositories.wrong_question_repo import (
+    bulk_create_wrong_questions,
+    count_user_wrong_questions,
+)
 from schemas.knowledge_schema import (
     has_meaningful_knowledge_content,
     knowledge_point_to_dict,
@@ -87,7 +90,7 @@ from services.adaptive_ocr_service import (
     is_rapid_ocr_available,
 )
 from services.pdf_outline_service import extract_pdf_outline_adaptively
-from services.llm_gateway import simple_prompt_completion
+from services.llm_gateway import simple_prompt_completion, stream_chat_completion
 from services import professional_question_prompts as question_prompts
 from services import professional_question_validator as question_validator
 from services import true_exam_reference_service
@@ -254,6 +257,60 @@ def _call_llm_api(prompt, model=None, max_tokens=1500, temperature=0.3, timeout=
         timeout=timeout,
         retries=retries,
     )
+
+
+def _safe_question_progress_callback(progress_callback, stage, details=None):
+    if not callable(progress_callback):
+        return
+    try:
+        progress_callback(stage, dict(details or {}))
+    except Exception:
+        # UI progress must never turn a valid model response into a failed request.
+        pass
+
+
+def _call_llm_api_stream(
+    prompt,
+    model=None,
+    max_tokens=1500,
+    temperature=0.3,
+    timeout=240,
+    retries=1,
+    on_progress=None,
+):
+    _safe_question_progress_callback(on_progress, "request_started")
+    chunks = []
+    received_chars = 0
+    try:
+        stream = stream_chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            retries=retries,
+        )
+        if isinstance(stream, str):
+            stream = (stream,)
+        for chunk in stream:
+            text = str(chunk or "")
+            if not text:
+                continue
+            chunks.append(text)
+            received_chars += len(text)
+            _safe_question_progress_callback(
+                on_progress,
+                "streaming",
+                {"received_chars": received_chars},
+            )
+    except Exception as exc:
+        _safe_question_progress_callback(
+            on_progress,
+            "failed",
+            {"error": _format_llm_error(exc)},
+        )
+        raise
+    return "".join(chunks)
 
 
 def _format_llm_error(exc):
@@ -3417,9 +3474,82 @@ def _inject_professional_workbench_styles():
             border-top-color: #38bdf8;
             animation: pkInlineSpin .78s linear infinite;
         }
+        .pk-question-progress {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 4px 0 16px;
+            padding: 14px 16px;
+            border: 1px solid #dbe4ef;
+            border-radius: 12px;
+            background: #f8fafc;
+            color: #334155;
+        }
+        .pk-question-progress-icon {
+            width: 24px;
+            height: 24px;
+            flex: 0 0 auto;
+            border: 3px solid #c7d2fe;
+            border-top-color: #4f46e5;
+            border-radius: 999px;
+            animation: pkQuestionSpin .85s linear infinite;
+        }
+        .pk-question-progress.is-complete .pk-question-progress-icon,
+        .pk-question-progress.is-failed .pk-question-progress-icon {
+            border: 0;
+            background: #e0e7ff;
+            animation: none;
+            position: relative;
+        }
+        .pk-question-progress.is-complete .pk-question-progress-icon::after {
+            content: "✓";
+            position: absolute;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            color: #4338ca;
+            font-weight: 800;
+        }
+        .pk-question-progress.is-failed .pk-question-progress-icon::after {
+            content: "!";
+            position: absolute;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            color: #b45309;
+            font-weight: 800;
+        }
+        .pk-question-progress-copy { min-width: 0; flex: 1; }
+        .pk-question-progress-title { color: #172033; font-size: .88rem; font-weight: 700; }
+        .pk-question-progress-detail { margin-top: 3px; color: #64748b; font-size: .76rem; line-height: 1.45; }
+        .pk-question-progress-track {
+            height: 3px;
+            margin-top: 8px;
+            border-radius: 999px;
+            background: #e2e8f0;
+            overflow: hidden;
+        }
+        .pk-question-progress-fill {
+            width: 42%;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #38bdf8, #4f46e5);
+            animation: pkQuestionProgress 1.2s ease-in-out infinite;
+        }
+        .pk-question-progress.is-complete .pk-question-progress-fill { width: 100%; animation: none; background: #22c55e; }
+        .pk-question-progress.is-failed .pk-question-progress-fill { width: 100%; animation: none; background: #f59e0b; }
         button[kind="primary"], button[kind="primaryFormSubmit"] { background: #4f46e5 !important; border-color: #4f46e5 !important; color: #fff !important; }
         button[kind="primary"]:hover, button[kind="primaryFormSubmit"]:hover { background: #4338ca !important; border-color: #4338ca !important; }
         input[type="checkbox"] { accent-color: #4f46e5; }
+        @keyframes pkQuestionSpin { to { transform: rotate(360deg); } }
+        @keyframes pkQuestionProgress {
+            0% { transform: translateX(-120%); }
+            100% { transform: translateX(250%); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .pk-question-progress-icon,
+            .pk-question-progress-fill { animation: none; }
+        }
         @media (max-width: 900px) {
             .pk-chat-hero { min-height: auto; }
             .pk-learning-banner { padding: 1.1rem 1.2rem; border-radius: 16px; }
@@ -5085,15 +5215,21 @@ def _question_generation_error(point, mode, warning):
     }
 
 
-def _generate_professional_question(point, mode="quiz", variant=0):
+def _generate_professional_question(point, mode="quiz", variant=0, *, progress_callback=None):
     fallback = _empty_professional_question_payload(mode)
     if not os.environ.get("AI_API_KEY", "").strip():
+        _safe_question_progress_callback(
+            progress_callback,
+            "failed",
+            {"error": "未配置 AI_API_KEY，无法生成专业课练习题。"},
+        )
         return _question_generation_error(point, mode, "未配置 AI_API_KEY，无法生成专业课练习题。")
     generated, warning = _generate_professional_question_with_ai(
         point,
         mode,
         variant=variant,
         allow_fallback=False,
+        progress_callback=progress_callback,
     )
     question = str(generated.get("question") or "").strip()
     if warning:
@@ -5365,11 +5501,19 @@ def _complete_professional_reference_payload(point, question, mode="quiz", varia
     return _parse_llm_json(_call_llm_api(prompt, max_tokens=1800, temperature=0.2, timeout=60, retries=0))
 
 
-def _complete_reference_if_needed(generated, point, mode="quiz", variant=1):
+def _complete_reference_if_needed(
+    generated,
+    point,
+    mode="quiz",
+    variant=1,
+    *,
+    progress_callback=None,
+):
     question = str(generated.get("question") or "").strip()
     reference = str(generated.get("reference_answer") or "").strip()
     if _is_placeholder_question(question) or len(question) < 18 or reference:
         return generated
+    _safe_question_progress_callback(progress_callback, "repairing", {"reason": "补全参考答案"})
     payload = _complete_professional_reference_payload(
         point,
         question,
@@ -5386,7 +5530,14 @@ def _complete_reference_if_needed(generated, point, mode="quiz", variant=1):
     return completed
 
 
-def _review_professional_question_payload(generated, point, mode, variant):
+def _review_professional_question_payload(
+    generated,
+    point,
+    mode,
+    variant,
+    *,
+    progress_callback=None,
+):
     prompt = question_prompts.build_review_professional_question_prompt(
         point,
         generated,
@@ -5413,6 +5564,7 @@ def _review_professional_question_payload(generated, point, mode, variant):
         point,
         mode=mode,
         variant=variant,
+        progress_callback=progress_callback,
     )
 
 
@@ -5423,8 +5575,16 @@ def _should_review_professional_question(point):
     return _is_408_knowledge_point(point) or _is_history_knowledge_point(point)
 
 
-def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, allow_fallback=False):
+def _generate_professional_question_with_ai(
+    point,
+    mode="quiz",
+    variant=1,
+    *,
+    allow_fallback=False,
+    progress_callback=None,
+):
     fallback = _empty_professional_question_payload(mode)
+    raw = ""
 
     def completed_response(item, *, reviewed=False):
         reference_metadata = true_exam_reference_service.get_true_exam_reference_metadata(
@@ -5450,6 +5610,15 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
             "generation_warning": "",
         }, ""
 
+    def completed_result(item, *, reviewed=False, fallback_used=False):
+        result = completed_response(item, reviewed=reviewed)
+        _safe_question_progress_callback(
+            progress_callback,
+            "completed",
+            {"received_chars": len(raw or ""), "fallback_used": fallback_used},
+        )
+        return result
+
     if not os.environ.get("AI_API_KEY", "").strip():
         local_fallback = _history_question_fallback(point, mode)
         if _is_valid_professional_question_for_point(
@@ -5457,23 +5626,48 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
             mode,
             point,
         ):
-            return completed_response(local_fallback)
+            return completed_result(local_fallback, fallback_used=True)
         warning = "未配置 AI_API_KEY，无法生成专业课练习题。"
+        _safe_question_progress_callback(progress_callback, "failed", {"error": warning})
         return _question_generation_error(point, mode, warning), warning
     prompt = question_prompts.build_professional_question_prompt(point, mode=mode, variant=variant)
     quality_reviewed = False
     try:
-        raw = ""
+        _safe_question_progress_callback(progress_callback, "request_started")
+        raw = _call_llm_api(
+            prompt,
+            max_tokens=3000,
+            temperature=0.4,
+            timeout=90,
+            retries=1,
+        )
         generated = {}
-        raw = _call_llm_api(prompt, max_tokens=3000, temperature=0.4, timeout=90, retries=1)
+        _safe_question_progress_callback(
+            progress_callback,
+            "validating",
+            {"received_chars": len(raw or "")},
+        )
         payload = _parse_llm_json(raw)
         generated = _normalize_professional_question_payload(payload, point, mode, fallback)
-        generated = _complete_reference_if_needed(generated, point, mode=mode, variant=variant)
+        generated = _complete_reference_if_needed(
+            generated,
+            point,
+            mode=mode,
+            variant=variant,
+            progress_callback=progress_callback,
+        )
         if not _is_valid_professional_question_for_point(generated, mode, point):
             loose_payload = _loose_professional_question_payload(raw)
             generated = _normalize_professional_question_payload(loose_payload, point, mode, fallback)
-            generated = _complete_reference_if_needed(generated, point, mode=mode, variant=variant)
+            generated = _complete_reference_if_needed(
+                generated,
+                point,
+                mode=mode,
+                variant=variant,
+                progress_callback=progress_callback,
+            )
         if not _is_valid_professional_question_for_point(generated, mode, point):
+            _safe_question_progress_callback(progress_callback, "repairing", {"attempt": 1})
             repair_payload = _repair_professional_question_payload(
                 raw,
                 point,
@@ -5486,7 +5680,13 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
                 ),
             )
             generated = _normalize_professional_question_payload(repair_payload, point, mode, fallback)
-            generated = _complete_reference_if_needed(generated, point, mode=mode, variant=variant)
+            generated = _complete_reference_if_needed(
+                generated,
+                point,
+                mode=mode,
+                variant=variant,
+                progress_callback=progress_callback,
+            )
         if not _is_valid_professional_question_for_point(generated, mode, point):
             local_fallback = _history_question_fallback(point, mode)
             if _is_valid_professional_question_for_point(
@@ -5496,10 +5696,18 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
             ):
                 generated = local_fallback
         if not _is_valid_professional_question_for_point(generated, mode, point):
+            _safe_question_progress_callback(progress_callback, "repairing", {"attempt": 2})
             minimal_payload = _minimal_professional_question_payload(point, mode, variant)
             generated = _normalize_professional_question_payload(minimal_payload, point, mode, fallback)
-            generated = _complete_reference_if_needed(generated, point, mode=mode, variant=variant)
+            generated = _complete_reference_if_needed(
+                generated,
+                point,
+                mode=mode,
+                variant=variant,
+                progress_callback=progress_callback,
+            )
         if not _is_valid_professional_question_for_point(generated, mode, point):
+            _safe_question_progress_callback(progress_callback, "repairing", {"attempt": 3})
             final_repair_payload = _repair_professional_question_payload(
                 json.dumps(generated, ensure_ascii=False),
                 point,
@@ -5522,6 +5730,7 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
                 point,
                 mode=mode,
                 variant=variant,
+                progress_callback=progress_callback,
             )
         if (
             mode == "algorithm"
@@ -5539,11 +5748,13 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
             and _should_review_professional_question(point)
         ):
             try:
+                _safe_question_progress_callback(progress_callback, "reviewing")
                 reviewed = _review_professional_question_payload(
                     generated,
                     point,
                     mode,
                     variant,
+                    progress_callback=progress_callback,
                 )
                 if _is_valid_professional_question_for_point(reviewed, mode, point):
                     generated = reviewed
@@ -5559,18 +5770,20 @@ def _generate_professional_question_with_ai(point, mode="quiz", variant=1, *, al
             mode,
             point,
         ):
-            return completed_response(local_fallback)
+            return completed_result(local_fallback, fallback_used=True)
         if allow_fallback:
             fallback["generation_warning"] = warning
             return fallback, warning
+        _safe_question_progress_callback(progress_callback, "failed", {"error": warning})
         return _question_generation_error(point, mode, warning), warning
     if not _is_valid_professional_question_for_point(generated, mode, point):
         warning = "AI 返回的题干或参考答案不完整。"
         if allow_fallback:
             fallback["generation_warning"] = warning
             return fallback, warning
+        _safe_question_progress_callback(progress_callback, "failed", {"error": warning})
         return _question_generation_error(point, mode, warning), warning
-    return completed_response(generated, reviewed=quality_reviewed)
+    return completed_result(generated, reviewed=quality_reviewed)
 
 
 def _fallback_professional_grade(point, answer):
@@ -5808,6 +6021,63 @@ def _question_with_options(question, options):
     return f"{question}\n" + "\n".join(options)
 
 
+def _build_professional_wrong_question_payload(
+    user_id,
+    subject,
+    point,
+    active,
+    user_answer="",
+):
+    """Build the shared wrongbook record for a generated professional question."""
+    title = str(point.get("knowledge_name") or "当前知识点").strip()
+    question = _question_with_options(
+        active.get("question") or "",
+        active.get("options") or [],
+    ).strip()
+    reference_answer = str(active.get("reference_answer") or "").strip()
+    correct_answer = str(active.get("correct_answer") or "").strip()
+    grading_points = [
+        str(item).strip()
+        for item in active.get("grading_points") or []
+        if str(item).strip()
+    ]
+    explanation_parts = [reference_answer] if reference_answer else []
+    if grading_points:
+        explanation_parts.append(
+            "评分要点：\n" + "\n".join(f"- {item}" for item in grading_points)
+        )
+
+    return {
+        "knowledge_id": point.get("id"),
+        "subject": subject,
+        "chapter_name": point.get("chapter_name") or title,
+        "question": question,
+        "user_answer": str(user_answer or "").strip(),
+        "correct_answer": correct_answer or reference_answer,
+        "explanation": "\n\n".join(explanation_parts),
+        "source_filename": f"专业课知识库：{title}",
+        "source_file_type": "generated",
+        "tags": ["AI出题"],
+    }
+
+
+def _save_professional_question_to_wrongbook(
+    user_id,
+    subject,
+    point,
+    active,
+    user_answer="",
+):
+    payload = _build_professional_wrong_question_payload(
+        user_id,
+        subject,
+        point,
+        active,
+        user_answer,
+    )
+    return bulk_create_wrong_questions(user_id, [payload])
+
+
 def _merge_generated_question_state(active, generated, warning=""):
     merged = dict(active or {})
     merged.update(generated or {})
@@ -5876,12 +6146,124 @@ def _question_point_with_retrieval_context(user_id, subject, point):
     return enriched
 
 
-def _start_professional_study(user_id, subject, point, mode, scope):
+def _render_professional_question_progress(placeholder, stage, details=None):
+    if placeholder is None:
+        return
+    details = details or {}
+    labels = {
+        "request_started": ("正在连接大模型", "连接已建立，准备生成题目"),
+        "streaming": ("正在生成题目", "题目内容正在分段接收"),
+        "validating": ("正在校验题目", "检查题型、题干、答案和评分点"),
+        "repairing": ("正在补全题目", "正在补齐参考答案并修正格式"),
+        "reviewing": ("正在质量审校", "正在检查专业课题目的准确性"),
+        "completed": ("题目准备完成", "即将呈现完整题目"),
+        "failed": ("题目生成未完成", "本次请求没有得到可用题目"),
+    }
+    title, detail = labels.get(stage, ("正在准备题目", "请稍候"))
+    if stage == "streaming" and str(details.get("received_chars") or "").isdigit():
+        detail = f"已接收 {int(details['received_chars'])} 个字符，正在整理完整题目"
+    if details.get("fallback_used"):
+        detail = "已准备可用题目，正在呈现完整内容"
+    progress_class = "pk-question-progress"
+    if stage in {"completed", "failed"}:
+        progress_class += f" is-{stage}"
+    placeholder.markdown(
+        f"""
+        <div class="{progress_class}">
+            <div class="pk-question-progress-icon" aria-hidden="true"></div>
+            <div class="pk-question-progress-copy">
+                <div class="pk-question-progress-title">{_escape_html(title)}</div>
+                <div class="pk-question-progress-detail">{_escape_html(detail)}</div>
+                <div class="pk-question-progress-track"><div class="pk-question-progress-fill"></div></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_professional_question_typewriter(placeholder, generated, delay=0.01):
+    if placeholder is None or not isinstance(generated, dict):
+        return
+    question = str(generated.get("question") or "").strip()
+    options = [str(item).strip() for item in generated.get("options") or [] if str(item).strip()]
+    if not question:
+        return
+
+    import time as _time
+
+    try:
+        delay_seconds = max(0.0, float(delay))
+    except (TypeError, ValueError):
+        delay_seconds = 0.0
+    visible_question = ""
+    visible_options = []
+    active_option = ""
+
+    def render_current():
+        option_values = list(visible_options)
+        if active_option:
+            option_values.append(active_option)
+        sections = [visible_question]
+        if option_values:
+            sections.append("**选项**\n\n" + "\n".join(f"- {item}" for item in option_values))
+        # Render directly into the flow so the placeholder grows with the text.
+        placeholder.markdown("\n\n".join(section for section in sections if section))
+
+    try:
+        for char in question:
+            visible_question += char
+            render_current()
+            if delay_seconds:
+                _time.sleep(delay_seconds)
+        for option in options:
+            active_option = ""
+            for char in option:
+                active_option += char
+                render_current()
+                if delay_seconds:
+                    _time.sleep(delay_seconds)
+            visible_options.append(option)
+            active_option = ""
+    except Exception:
+        try:
+            placeholder.markdown(question)
+        except Exception:
+            pass
+
+
+def _start_professional_study(
+    user_id,
+    subject,
+    point,
+    mode,
+    scope,
+    *,
+    progress_placeholder=None,
+    progress_callback=None,
+):
     variant_key = f"pk_question_variant_{user_id}_{subject}_{point.get('id')}_{mode}_{scope}"
     variant = int(st.session_state.get(variant_key) or 0) + 1
     st.session_state[variant_key] = variant
     generation_point = _question_point_with_retrieval_context(user_id, subject, point)
-    generated = _generate_professional_question(generation_point, mode, variant=variant)
+    if progress_callback is None and progress_placeholder is not None:
+        progress_callback = lambda stage, details: _render_professional_question_progress(
+            progress_placeholder,
+            stage,
+            details,
+        )
+    generated = _generate_professional_question(
+        generation_point,
+        mode,
+        variant=variant,
+        progress_callback=progress_callback,
+    )
+    if (
+        progress_placeholder is not None
+        and not generated.get("generation_failed")
+        and not _is_placeholder_question(generated.get("question") or "")
+    ):
+        _render_professional_question_typewriter(progress_placeholder, generated)
     st.session_state[_study_state_key(user_id, subject, scope)] = {
         "point_id": point.get("id"),
         "mode": mode,
@@ -5929,7 +6311,13 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
         st.markdown("**选项**")
         for option in options:
             st.markdown(f"- {option}")
-    tool_col1, tool_col2 = st.columns(2)
+    # Keep the live renderer outside the action columns so it has the full content width.
+    answer_key = f"pk_study_answer_{scope}_{point.get('id')}_{active.get('mode')}"
+    wrongbook_notice_key = (
+        f"pk_study_wrongbook_notice_{scope}_{point.get('id')}_{active.get('mode')}"
+    )
+    progress_placeholder = st.empty()
+    tool_col1, tool_col2, tool_col3 = st.columns(3)
     with tool_col1:
         regenerate_label = "重新生成" if generation_failed else "换一道题"
         if st.button(regenerate_label, key=f"pk_study_regenerate_{scope}_{point.get('id')}_{active.get('mode')}", use_container_width=True):
@@ -5940,10 +6328,21 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
                 active.get("mode") or "quiz",
                 variant=variant,
                 allow_fallback=False,
+                progress_callback=lambda stage, details: _render_professional_question_progress(
+                    progress_placeholder,
+                    stage,
+                    details,
+                ),
             )
             active = _merge_generated_question_state(active, generated, warning)
             active["variant"] = variant
+            if (
+                not active.get("generation_failed")
+                and not _is_placeholder_question(active.get("question") or "")
+            ):
+                _render_professional_question_typewriter(progress_placeholder, active)
             st.session_state[state_key] = active
+            progress_placeholder.empty()
             st.rerun()
     with tool_col2:
         if st.button(
@@ -5979,8 +6378,30 @@ def _render_professional_study_panel(user_id, subject, point_map, scope, *, acti
                 conn.close()
             _queue_toast("已保存到复习挑战的题目复练")
             st.rerun()
+    with tool_col3:
+        if st.button(
+            "加入错题本",
+            key=f"pk_study_wrongbook_{scope}_{point.get('id')}_{active.get('mode')}",
+            use_container_width=True,
+            disabled=generation_failed,
+        ):
+            if active.get("generation_failed") or not str(question_text or "").strip():
+                st.warning("当前没有可加入错题本的有效题目，请先重新生成。")
+                return
+            saved_count = _save_professional_question_to_wrongbook(
+                user_id,
+                subject,
+                point,
+                active,
+                st.session_state.get(answer_key, ""),
+            )
+            if saved_count:
+                st.session_state[wrongbook_notice_key] = True
+                st.rerun()
+            st.warning("加入错题本失败，请稍后重试。")
+    if st.session_state.pop(wrongbook_notice_key, False):
+        st.success("添加成功")
     result = active.get("result")
-    answer_key = f"pk_study_answer_{scope}_{point.get('id')}_{active.get('mode')}"
     if result:
         st.markdown(f"**本次得分：{result.get('score', 0)} / 100**")
         st.write(result.get("feedback") or "本次结果已记录。")
@@ -6346,6 +6767,7 @@ def _render_professional_knowledge_library(user_id, subject, points, sources):
         quiz_label = "史料题" if history_mode else "出题"
         algorithm_label = "论述题" if history_mode else "算法题"
         concept_label = "名词解释" if history_mode else "概念自测"
+        progress_placeholder = st.empty()
         view_col, quiz_col, choice_col, blank_col, algo_col, concept_col = st.columns([1.2, 1, 1, 1, 1, 1])
         with view_col:
             is_open = point_id_key in open_ids
@@ -6359,23 +6781,63 @@ def _render_professional_knowledge_library(user_id, subject, points, sources):
                 st.rerun()
         with quiz_col:
             if st.button(quiz_label, key=f"pk_library_quiz_{point_id}", use_container_width=True):
-                _start_professional_study(user_id, subject, point, "application", "library")
+                _start_professional_study(
+                    user_id,
+                    subject,
+                    point,
+                    "application",
+                    "library",
+                    progress_placeholder=progress_placeholder,
+                )
+                progress_placeholder.empty()
                 st.rerun()
         with choice_col:
             if st.button("选择题", key=f"pk_library_choice_{point_id}", use_container_width=True):
-                _start_professional_study(user_id, subject, point, "choice", "library")
+                _start_professional_study(
+                    user_id,
+                    subject,
+                    point,
+                    "choice",
+                    "library",
+                    progress_placeholder=progress_placeholder,
+                )
+                progress_placeholder.empty()
                 st.rerun()
         with blank_col:
             if st.button("填空题", key=f"pk_library_blank_{point_id}", use_container_width=True):
-                _start_professional_study(user_id, subject, point, "blank", "library")
+                _start_professional_study(
+                    user_id,
+                    subject,
+                    point,
+                    "blank",
+                    "library",
+                    progress_placeholder=progress_placeholder,
+                )
+                progress_placeholder.empty()
                 st.rerun()
         with algo_col:
             if st.button(algorithm_label, key=f"pk_library_algorithm_{point_id}", use_container_width=True):
-                _start_professional_study(user_id, subject, point, "algorithm", "library")
+                _start_professional_study(
+                    user_id,
+                    subject,
+                    point,
+                    "algorithm",
+                    "library",
+                    progress_placeholder=progress_placeholder,
+                )
+                progress_placeholder.empty()
                 st.rerun()
         with concept_col:
             if st.button(concept_label, key=f"pk_library_concept_{point_id}", use_container_width=True):
-                _start_professional_study(user_id, subject, point, "concept", "library")
+                _start_professional_study(
+                    user_id,
+                    subject,
+                    point,
+                    "concept",
+                    "library",
+                    progress_placeholder=progress_placeholder,
+                )
+                progress_placeholder.empty()
                 st.rerun()
 
         if point_id_key in open_ids:
@@ -6453,6 +6915,7 @@ def _render_professional_review_challenge(user_id, subject, points):
         with st.expander(f"{index}. {title} · 当前掌握 {mastery}%", expanded=False):
             st.caption("先在脑子里讲一遍，再决定要不要看提示。")
             hint_key = f"pk_review_hint_open_{user_id}_{subject}_{point.get('id')}"
+            progress_placeholder = st.empty()
             hint_col, know_col, again_col, quiz_col = st.columns(4)
             with hint_col:
                 if st.button("查看提示", key=f"pk_review_hint_{point.get('id')}", use_container_width=True):
@@ -6485,7 +6948,15 @@ def _render_professional_review_challenge(user_id, subject, points):
                     st.rerun()
             with quiz_col:
                 if st.button("出一道题", key=f"pk_review_quiz_{point.get('id')}", use_container_width=True):
-                    _start_professional_study(user_id, subject, point, "application", "review")
+                    _start_professional_study(
+                        user_id,
+                        subject,
+                        point,
+                        "application",
+                        "review",
+                        progress_placeholder=progress_placeholder,
+                    )
+                    progress_placeholder.empty()
                     st.rerun()
             if st.session_state.get(hint_key):
                 st.markdown(point.get("core_definition") or point.get("content") or "暂无摘要。")

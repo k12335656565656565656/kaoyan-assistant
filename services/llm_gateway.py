@@ -216,7 +216,16 @@ def stream_chat_completion(
                     obj = json.loads(raw_payload)
                 except json.JSONDecodeError:
                     continue
-                delta_obj = obj.get("choices", [{}])[0].get("delta", {})
+                choices = obj.get("choices") or []
+                if not isinstance(choices, list) or not choices:
+                    # Providers may emit keepalive/usage events without a delta.
+                    continue
+                first_choice = choices[0]
+                if not isinstance(first_choice, dict):
+                    continue
+                delta_obj = first_choice.get("delta") or {}
+                if not isinstance(delta_obj, dict):
+                    continue
                 delta = delta_obj.get("content") or ""
                 if delta:
                     yield delta

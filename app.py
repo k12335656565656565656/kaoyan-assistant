@@ -18,6 +18,7 @@ import urllib.error
 import re
 import traceback
 import secrets
+import hashlib
 import io
 import kaoyan_predict
 from recommend import generate_recommendation
@@ -27,13 +28,21 @@ from docx import Document
 from docx.shared import Pt
 from services.llm_gateway import _apply_provider_options
 from services.adaptive_ocr_service import extract_text_adaptively
+from services.auth_cookie import (
+    AUTH_SESSION_DAYS,
+    auth_session_cutoff,
+    read_cookie_value,
+    select_auth_token,
+)
 from wrongbook_utils import (
+    build_wrongbook_capture,
     detect_subject,
     extract_final_message_content,
     parse_wrongbook_ai_answer,
     parse_wrongbook_ai_question,
     parse_smart_answer_output,
     save_wrongbook_payload,
+    select_quiz_for_wrongbook,
     split_wrongbook_answer_explanation,
 )
 
@@ -525,6 +534,10 @@ st.markdown("""
     .feature-card:nth-child(2) { animation-delay: 0.12s, 0.12s; }
     .feature-card:nth-child(3) { animation-delay: 0.19s, 0.19s; }
     .feature-card:nth-child(4) { animation-delay: 0.26s, 0.26s; }
+    .feature-card:nth-child(5) { animation-delay: 0.33s, 0.33s; }
+    .feature-card:nth-child(6) { animation-delay: 0.40s, 0.40s; }
+    .feature-card:nth-child(7) { animation-delay: 0.47s, 0.47s; }
+    .feature-card:nth-child(8) { animation-delay: 0.54s, 0.54s; }
 
     /* QA card — smooth rise */
     .qa-card {
@@ -533,6 +546,89 @@ st.markdown("""
     @keyframes qaRise {
         from { opacity: 0; transform: translateY(10px); }
         to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .math-question-progress {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 4px 0 16px;
+        min-height: 112px;
+        padding: 18px 20px;
+        border: 1px solid #dbe4ef;
+        border-radius: 12px;
+        background: #f8fafc;
+        color: #334155;
+    }
+    .math-question-progress-icon {
+        width: 32px;
+        height: 32px;
+        flex: 0 0 auto;
+        border: 3px solid #c7d2fe;
+        border-top-color: #4f46e5;
+        border-radius: 999px;
+        animation: mathQuestionSpin .85s linear infinite;
+    }
+    .math-question-progress.is-complete .math-question-progress-icon,
+    .math-question-progress.is-failed .math-question-progress-icon {
+        border: 0;
+        background: #e0e7ff;
+        animation: none;
+        position: relative;
+    }
+    .math-question-progress.is-complete .math-question-progress-icon::after {
+        content: "✓";
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: #4338ca;
+        font-weight: 800;
+    }
+    .math-question-progress.is-failed .math-question-progress-icon::after {
+        content: "!";
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: #b45309;
+        font-weight: 800;
+    }
+    .math-question-progress-copy { min-width: 0; flex: 1; }
+    .math-question-progress-title { color: #172033; font-size: 1rem; font-weight: 700; }
+    .math-question-progress-detail { margin-top: 4px; color: #64748b; font-size: .84rem; line-height: 1.45; }
+    .math-question-progress-track {
+        height: 4px;
+        margin-top: 10px;
+        border-radius: 999px;
+        background: #e2e8f0;
+        overflow: hidden;
+    }
+    .math-question-progress-fill {
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #38bdf8, #4f46e5);
+        animation: mathQuestionProgress 1.2s ease-in-out infinite;
+    }
+    .math-question-progress.is-complete .math-question-progress-fill {
+        width: 100%;
+        animation: none;
+        background: #22c55e;
+    }
+    .math-question-progress.is-failed .math-question-progress-fill {
+        width: 100%;
+        animation: none;
+        background: #f59e0b;
+    }
+    @keyframes mathQuestionSpin { to { transform: rotate(360deg); } }
+    @keyframes mathQuestionProgress {
+        0% { transform: translateX(-120%); }
+        100% { transform: translateX(250%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .math-question-progress-icon,
+        .math-question-progress-fill { animation: none; }
     }
 
     /* ── Loading Pulse (plays once on page load, feels intentional) ── */
@@ -594,6 +690,12 @@ st.markdown("""
         cursor: pointer; margin-bottom: 4px; position: relative; overflow: hidden;
         height: 100%; min-height: 190px;
         display: flex; flex-direction: column;
+    }
+    /* Hub actions sit outside Streamlit's markdown element; a shared card height keeps their baselines aligned. */
+    .hub-feature-card {
+        height: 232px;
+        min-height: 232px;
+        box-sizing: border-box;
     }
     .feature-card::before {
         content: '';
@@ -663,6 +765,19 @@ st.markdown("""
         display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px;
         position: relative; z-index: 1;
     }
+    /* ── Hub Card Grid (equal-height row) ── */
+    .hub-card-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1rem;
+        margin-bottom: 0.3rem;
+    }
+    @media (max-width: 768px) {
+        .hub-card-row { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 480px) {
+        .hub-card-row { grid-template-columns: 1fr; }
+    }
     .feature-card .card-tag {
         font-size: 0.68rem; padding: 3px 9px;
         background: rgba(241,245,249,0.8); color: #6366f1;
@@ -676,6 +791,8 @@ st.markdown("""
     .icon-fb   { background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); color: #0284c7; }
     .icon-mat  { background: linear-gradient(135deg, #fefce8 0%, #fef9c3 100%); color: #ca8a04; }
     .icon-ck   { background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); color: #16a34a; }
+    .icon-pro  { background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); color: #7c3aed; }
+    .icon-wb   { background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%); color: #e11d48; }
 
     /* ── Card Breathing Animation ── */
     @keyframes cardBreathe {
@@ -757,6 +874,7 @@ st.markdown("""
     button[kind="primary"], .st-key-hub_qa button, .st-key-hub_pop button,
     .st-key-hub_english button, .st-key-hub_suggest button,
     .st-key-hub_material button, .st-key-hub_checkin button,
+    .st-key-hub_professional_kb button, .st-key-hub_wrongbook button,
     button[data-testid="baseButton-primary"],
     div[data-testid="stButton"] button[kind="primary"] {
         background: #2563eb !important; color: #ffffff !important;
@@ -898,6 +1016,10 @@ st.markdown("""
             right: 0.5rem;
             z-index: 999;
         }
+        /* Touch target sizing */
+        .stButton button { min-height: 44px !important; padding: 10px 16px !important; }
+        button[kind="primary"] { min-height: 44px !important; }
+        .nav-item { padding: 10px 14px !important; min-height: 44px; }
     }
     @media (max-width: 480px) {
         .main-title { padding: 0.8rem !important; }
@@ -906,6 +1028,20 @@ st.markdown("""
         .cal-grid { grid-template-columns: repeat(5, 1fr) !important; }
         div[data-testid="stMetricValue"] { font-size: 0.9rem !important; }
         div[data-testid="stMetricLabel"] { font-size: 0.7rem !important; }
+        /* Force Streamlit columns to stack */
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 0.4rem !important;
+        }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+        /* Reduce fixed heights */
+        .feature-card { min-height: auto !important; }
+        .hub-feature-card { height: auto; }
+        /* Table horizontal scroll */
+        .study-phase-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     }
 </style>
 <style>
@@ -973,36 +1109,89 @@ def get_cookie_manager():
 cookie_manager = get_cookie_manager()
 
 def generate_login_token():
-    """生成 64 字符随机 token"""
+    """生成仅保存在浏览器 Cookie 中的随机会话 token。"""
     return secrets.token_hex(32)
 
-def save_login_token(user_id, token):
-    """将 token 存入数据库"""
+
+def _token_digest(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_login_session(user_id, token):
+    """创建独立设备会话；数据库只保存 token 摘要。"""
+    now = datetime.now()
+    expires_at = now + timedelta(days=AUTH_SESSION_DAYS)
     conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("UPDATE users SET login_token=? WHERE id=?", (token, user_id))
+    conn.execute(
+        """INSERT INTO auth_sessions (user_id, token_hash, created_at, expires_at, last_seen_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (user_id, _token_digest(token), now.isoformat(sep=" "),
+         expires_at.isoformat(sep=" "), now.isoformat(sep=" ")),
+    )
     conn.commit()
     conn.close()
+
 
 def verify_login_token(token):
-    """验证 token，返回 user_id 或 None"""
-    if not token:
+    """验证未过期、未撤销的会话，返回所属用户而非前端声明的身份。"""
+    if not token or not isinstance(token, str):
         return None
+    now = datetime.now()
     conn = sqlite3.connect(MEMORY_DB)
-    c = conn.cursor()
-    c.execute("SELECT id, username FROM users WHERE login_token=?", (token,))
-    row = c.fetchone()
+    row = conn.execute(
+        """SELECT u.id, u.username
+           FROM auth_sessions s JOIN users u ON u.id=s.user_id
+           WHERE s.token_hash=? AND s.revoked_at IS NULL
+             AND s.expires_at>? AND s.created_at>?
+           LIMIT 1""",
+        (
+            _token_digest(token),
+            now.isoformat(sep=" "),
+            auth_session_cutoff(now).isoformat(sep=" "),
+        ),
+    ).fetchone()
     conn.close()
-    if row:
-        return {"user_id": row[0], "username": row[1]}
-    return None
+    return {"user_id": row[0], "username": row[1]} if row else None
 
-def clear_login_token(user_id):
-    """清除数据库中的 token"""
+
+def revoke_login_session(token):
+    """只撤销当前设备会话，不影响同账号的其他设备。"""
+    if not token or not isinstance(token, str):
+        return
     conn = sqlite3.connect(MEMORY_DB)
-    conn.execute("UPDATE users SET login_token=NULL WHERE id=?", (user_id,))
+    conn.execute(
+        "UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
+        (datetime.now().isoformat(sep=" "), _token_digest(token)),
+    )
     conn.commit()
     conn.close()
+
+
+def clear_user_session_state():
+    """在登录切换、退出或会话失效时移除全部用户私有的页面状态。"""
+    for key in list(st.session_state.keys()):
+        if key != "cookie_manager":
+            del st.session_state[key]
+    st.session_state.logged_in = False
+    st.session_state.user_id = None
+    st.session_state.username = None
+    st.session_state.page = "hub"
+
+
+def set_authenticated_user(user_info):
+    """切换身份时先清理旧用户状态，再写入已验证的身份。"""
+    clear_user_session_state()
+    st.session_state.logged_in = True
+    st.session_state.user_id = user_info["user_id"]
+    st.session_state.username = user_info["username"]
+
+
+def require_authenticated_user_id():
+    """返回当前已验证用户；绝不把缺失身份回退到默认用户。"""
+    user_id = st.session_state.get("user_id")
+    if not st.session_state.get("logged_in") or not isinstance(user_id, int):
+        raise RuntimeError("未认证用户不能访问或写入用户数据")
+    return user_id
 
 # ==================== 核心功能 ====================
 
@@ -1037,6 +1226,33 @@ def _typing_display(placeholder, text, delay=0.02):
                 displayed += char
                 placeholder.markdown(displayed)
                 _time.sleep(delay)
+
+
+def _render_math_question_progress(placeholder, stage="request_started"):
+    """Render the same generation feedback pattern used by professional questions."""
+    labels = {
+        "request_started": ("正在连接大模型", "连接已建立，准备生成题目"),
+        "validating": ("正在校验题目", "检查题干、选项、答案和解析"),
+        "completed": ("题目准备完成", "即将呈现题目"),
+        "failed": ("题目生成未完成", "本次请求没有得到可用题目"),
+    }
+    title, detail = labels.get(stage, labels["request_started"])
+    progress_class = "math-question-progress"
+    if stage in {"completed", "failed"}:
+        progress_class += f" is-{stage}"
+    placeholder.markdown(
+        f"""
+        <div class="{progress_class}">
+            <div class="math-question-progress-icon" aria-hidden="true"></div>
+            <div class="math-question-progress-copy">
+                <div class="math-question-progress-title">{title}</div>
+                <div class="math-question-progress-detail">{detail}</div>
+                <div class="math-question-progress-track"><div class="math-question-progress-fill"></div></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def read_file(p):
     try:
@@ -1140,7 +1356,7 @@ def login_user(username, password):
     return row[0] if row else None
 
 def get_experience_file():
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     return Path(f"agent_experience_{uid}.md")
 
 def load_agent_experience():
@@ -1185,8 +1401,36 @@ def init_memory_db():
     try: c.execute("SELECT login_token FROM users LIMIT 1")
     except: c.execute("ALTER TABLE users ADD COLUMN login_token TEXT")
 
+    # 多设备独立会话。旧版 users.login_token 仅支持单设备，升级时迁移后废弃。
+    c.execute("""CREATE TABLE IF NOT EXISTS auth_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        revoked_at TIMESTAMP,
+        last_seen_at TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)")
+    legacy_tokens = c.execute(
+        "SELECT id, login_token FROM users WHERE login_token IS NOT NULL AND login_token != ''"
+    ).fetchall()
+    if legacy_tokens:
+        now = datetime.now()
+        expires_at = now + timedelta(days=AUTH_SESSION_DAYS)
+        for legacy_user_id, legacy_token in legacy_tokens:
+            c.execute(
+                """INSERT OR IGNORE INTO auth_sessions
+                   (user_id, token_hash, created_at, expires_at, last_seen_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (legacy_user_id, _token_digest(legacy_token), now.isoformat(sep=" "),
+                 expires_at.isoformat(sep=" "), now.isoformat(sep=" ")),
+            )
+        c.execute("UPDATE users SET login_token=NULL WHERE login_token IS NOT NULL")
+
     c.execute("""CREATE TABLE IF NOT EXISTS knowledge_mastery (
-        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER DEFAULT 1,
+        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER NOT NULL,
         mastery_level REAL DEFAULT 0, status TEXT DEFAULT '陌生',
         times_correct INTEGER DEFAULT 0, times_wrong INTEGER DEFAULT 0,
         stability REAL DEFAULT 1.0, last_review TIMESTAMP,
@@ -1208,12 +1452,12 @@ def init_memory_db():
         c.execute("ALTER TABLE knowledge_mastery ADD COLUMN stability REAL DEFAULT 1.0")
 
     c.execute("""CREATE TABLE IF NOT EXISTS user_performance (
-        id INTEGER PRIMARY KEY, user_id INTEGER DEFAULT 1,
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
         knowledge_id TEXT, is_correct INTEGER, error_type TEXT,
         mastery_score REAL, created_at TIMESTAMP)""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS review_challenges (
-        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER DEFAULT 1,
+        id INTEGER PRIMARY KEY, knowledge_id TEXT, user_id INTEGER NOT NULL,
         challenge_type TEXT, completed INTEGER DEFAULT 0,
         created_at TIMESTAMP)""")
 
@@ -1839,8 +2083,8 @@ def _save_knowledge_points(user_id, material_id, subject, chapter_name, llm_resu
             VALUES (?, ?, ?, ?, ?, ?)""",
             (user_id, material_id, subject, chapter_name, name_kb, llm_result))
         count += 1
-    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=?",
-             (count, material_id))
+    c.execute("UPDATE user_materials SET processing_status='done', knowledge_count=? WHERE id=? AND user_id=?",
+             (count, material_id, user_id))
     conn.commit()
     conn.close()
     return count
@@ -2290,13 +2534,28 @@ def get_user_tasks(user_id):
     conn.close()
     return res
 
-def update_task_status(task_id, new_status):
+def update_task_status(user_id_or_task_id, task_id_or_new_status, new_status=None):
+    """Update one task, accepting both legacy and upstream call signatures safely."""
+    current_user_id = require_authenticated_user_id()
+    if new_status is None:
+        task_id = user_id_or_task_id
+        status = task_id_or_new_status
+    else:
+        if user_id_or_task_id != current_user_id:
+            raise PermissionError("不能修改其他用户的学习任务")
+        task_id = task_id_or_new_status
+        status = new_status
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
-    completed_at = datetime.now().strftime("%Y-%m-%d") if new_status == "completed" else None
-    c.execute("UPDATE plan_tasks SET status = ?, completed_at = ? WHERE id = ?", (new_status, completed_at, task_id))
+    completed_at = datetime.now().strftime("%Y-%m-%d") if status == "completed" else None
+    c.execute(
+        "UPDATE plan_tasks SET status = ?, completed_at = ? WHERE id = ? AND user_id = ?",
+        (status, completed_at, task_id, current_user_id),
+    )
     conn.commit()
+    updated = c.rowcount
     conn.close()
+    return updated > 0
 
 def calculate_progress(user_id):
     conn = sqlite3.connect(MEMORY_DB)
@@ -2888,7 +3147,7 @@ PROBLEM_EVAL_PROMPT = """你是考研数学辅导专家，同时也是教育心�
 
 def update_memory(kid, is_mastered, error_type="", mastery_score=0):
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("SELECT times_correct, times_wrong, stability FROM knowledge_mastery WHERE knowledge_id=? AND user_id=?", (kid, uid))
@@ -2923,7 +3182,7 @@ def update_memory(kid, is_mastered, error_type="", mastery_score=0):
 
 def add_to_wrongbook(question, correct_answer, user_answer="", explanation="", subject=""):
     """通用：将错题写入 user_wrong_questions 表"""
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     init_memory_db()
     payload = {
         "subject": subject,
@@ -2994,7 +3253,7 @@ def _extract_wrongbook_question_locally(question="", correct_answer="", user_ans
     return _clean_extracted_question(question)
 
 def _record_qa_knowledge(docs):
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     try:
         init_memory_db()
         conn = sqlite3.connect(MEMORY_DB)
@@ -3010,7 +3269,7 @@ def _record_qa_knowledge(docs):
 
 def get_memory_stats():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM knowledge_mastery WHERE status='掌握' AND user_id=?", (uid,))
@@ -3024,7 +3283,7 @@ def get_memory_stats():
 
 def get_weak_points():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("""SELECT knowledge_id, times_wrong, times_correct, status, stability, error_type
@@ -3039,7 +3298,7 @@ def get_weak_points():
 
 def get_review_candidates():
     init_memory_db()
-    uid = st.session_state.get("user_id", 1)
+    uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     c.execute("""SELECT knowledge_id, mastery_level, status, stability, last_review
@@ -3069,12 +3328,18 @@ def get_review_candidates():
     candidates.sort(key=lambda x: x["urgency"], reverse=True)
     return candidates[:10]
 
-def create_review_challenge(kid):
+def create_review_challenge(user_id_or_kid, kid=None):
+    """Create a review challenge with either supported call signature."""
+    current_user_id = require_authenticated_user_id()
+    if kid is None:
+        kid = user_id_or_kid
+    elif user_id_or_kid != current_user_id:
+        raise PermissionError("不能为其他用户创建复习任务")
     init_memory_db()
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
-    c.execute("""INSERT INTO review_challenges (knowledge_id, challenge_type, created_at)
-        VALUES (?, '自动复习', ?)""", (kid, datetime.now()))
+    c.execute("""INSERT INTO review_challenges (knowledge_id, user_id, challenge_type, created_at)
+        VALUES (?, ?, '自动复习', ?)""", (kid, current_user_id, datetime.now()))
     conn.commit()
     conn.close()
 
@@ -4210,16 +4475,30 @@ if "page" not in st.session_state:
 # 确保数据库表存在（登录前就必须建好）
 init_memory_db()
 
-# 自动登录（CookieManager 方案）
-if not st.session_state.logged_in:
-    token = cookie_manager.get("auth_token")
-    if token:
-        user_info = verify_login_token(token)
-        if user_info:
-            st.session_state.logged_in = True
-            st.session_state.user_id = user_info["user_id"]
-            st.session_state.username = user_info["username"]
-            st.rerun()
+# 每次 rerun 都以 Cookie 会话为准，不能信任可能残留的 session_state 身份。
+cookie_token = read_cookie_value(cookie_manager, "auth_token")
+token = select_auth_token(
+    cookie_token,
+    st.session_state.get("_auth_session_token"),
+)
+user_info = verify_login_token(token)
+session_user_id = st.session_state.get("user_id")
+if user_info:
+    auth_state_changed = (
+        not st.session_state.get("logged_in")
+        or session_user_id != user_info["user_id"]
+        or st.session_state.get("username") != user_info["username"]
+    )
+    if auth_state_changed:
+        set_authenticated_user(user_info)
+    st.session_state._auth_session_token = token
+    if auth_state_changed:
+        st.rerun()
+elif st.session_state.get("logged_in") or session_user_id is not None:
+    clear_user_session_state()
+    if cookie_token:
+        cookie_manager.delete("auth_token")
+    st.rerun()
 
 if not st.session_state.logged_in:
     # ─── 登录/注册页 ───
@@ -4245,11 +4524,10 @@ if not st.session_state.logged_in:
                 uid = login_user(username, password)
                 if uid:
                     token = generate_login_token()
-                    save_login_token(uid, token)
-                    cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
-                    st.session_state.logged_in = True
-                    st.session_state.user_id = uid
-                    st.session_state.username = username
+                    create_login_session(uid, token)
+                    cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=AUTH_SESSION_DAYS))
+                    set_authenticated_user({"user_id": uid, "username": username})
+                    st.session_state._auth_session_token = token
                     st.success("登录成功！")
                     st.rerun()
                 else:
@@ -4270,11 +4548,10 @@ if not st.session_state.logged_in:
                     uid = register_user(new_user, new_pass)
                     if uid:
                         token = generate_login_token()
-                        save_login_token(uid, token)
-                        cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=30))
-                        st.session_state.logged_in = True
-                        st.session_state.user_id = uid
-                        st.session_state.username = new_user
+                        create_login_session(uid, token)
+                        cookie_manager.set("auth_token", token, expires_at=datetime.now() + timedelta(days=AUTH_SESSION_DAYS))
+                        set_authenticated_user({"user_id": uid, "username": new_user})
+                        st.session_state._auth_session_token = token
                         st.success(f"注册成功！欢迎 {new_user}")
                         st.rerun()
                     else:
@@ -4410,12 +4687,13 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     if st.button("退出登录", key="sidebar_logout", use_container_width=True):
-        clear_login_token(st.session_state.get("user_id", 0))
+        revoke_login_session(
+            st.session_state.get("_auth_session_token")
+            or read_cookie_value(cookie_manager, "auth_token")
+        )
         cookie_manager.delete("auth_token")
         kb.clear_professional_session_state()
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.page = "hub"
+        clear_user_session_state()
         st.rerun()
 
 # ==================== 全局：加入错题本表单 ====================
@@ -4852,6 +5130,7 @@ if st.session_state.page == "main":
 
         btn_quiz = st.session_state.pop("_btn_quiz", None)
         if btn_quiz and btn_quiz.get("success"):
+            st.session_state._last_generated_quiz = btn_quiz
             st.markdown("#### 练习题")
             render_qa_cards(btn_quiz['questions'], columns=1, typing=True)
 
@@ -4888,6 +5167,7 @@ if st.session_state.page == "main":
                 if st.button("生成复习题", use_container_width=True):
                     m = st.session_state.get("_matched_knowledge") or smart_match_knowledge(st.session_state.get("_last_query", ""))
                     if m:
+                        st.session_state._last_generated_quiz = None
                         with st.spinner("正在生成题目..."):
                             st.session_state._btn_quiz = generate_review_questions([{"knowledge_id": k} for k in m[:2]])
                     else:
@@ -4895,17 +5175,18 @@ if st.session_state.page == "main":
                     st.rerun()
             with c4:
                 if st.button("加入错题本", use_container_width=True):
-                    # 尝试用 _parse_quiz_block 解析选择题格式，分离题干/选项和答案/解析
-                    _raw_q = st.session_state.get("_last_query", "")
-                    _parsed = _parse_quiz_block(_raw_q)
-                    if _parsed:
-                        _wb_q = _parsed['full_question']
-                        _wb_c = _parsed['answer'] or ''
-                        if _parsed['explain']:
-                            _wb_c += ("\n\n解析：" + _parsed['explain']) if _wb_c else _parsed['explain']
-                    else:
-                        _wb_q = _raw_q
-                        _wb_c = st.session_state.get("_last_answer_text", "")
+                    _quiz = select_quiz_for_wrongbook(
+                        st.session_state.get("_last_generated_quiz"),
+                    )
+                    _capture = build_wrongbook_capture(
+                        (_quiz or {}).get("questions", ""),
+                        fallback_question=st.session_state.get("_last_query", ""),
+                        fallback_correct_answer=st.session_state.get("_last_answer_text", ""),
+                    )
+                    _wb_q = _capture["question"]
+                    _wb_c = _capture["correct_answer"]
+                    if _capture["explanation"]:
+                        _wb_c += ("\n\n解析：" + _capture["explanation"]) if _wb_c else _capture["explanation"]
                     st.session_state._wb_form = True
                     st.session_state._wb_form_fresh = False
                     st.session_state._wb_question = _wb_q
@@ -4960,6 +5241,9 @@ if st.session_state.page == "main":
                 """, unsafe_allow_html=True)
 
 
+                # The full-width placeholder keeps generation feedback aligned with the knowledge card.
+                quiz_progress = st.empty()
+
                 # 按钮行
                 b1, b2, b3 = st.columns([1.5, 1, 1])
                 with b1:
@@ -4967,10 +5251,10 @@ if st.session_state.page == "main":
                         st.session_state[f"show_{doc_id}"] = not st.session_state.get(f"show_{doc_id}", False)
                 with b2:
                     if st.button("出题", key=f"quiz_{doc_id}", use_container_width=True):
-                        _hint = st.empty()
-                        _hint.markdown('<div style="display:flex;align-items:center;gap:8px;padding:6px 0"><div style="width:14px;height:14px;border:2px solid #e2e8f0;border-top-color:#94a3b8;border-radius:50%;animation:sp06 .6s linear infinite"></div><span style="font-size:.78rem;color:#64748b">AI 正在出题思考中...</span></div><style>@keyframes sp06{to{transform:rotate(360deg)}}</style>', unsafe_allow_html=True)
+                        _render_math_question_progress(quiz_progress, "request_started")
+                        st.session_state._kb_last_quiz = None
                         st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": doc_id}])
-                        _hint.empty()
+                        quiz_progress.empty()
                         st.session_state._kb_qid = doc_id
                         st.rerun()
                 with b3:
@@ -4981,7 +5265,10 @@ if st.session_state.page == "main":
 
                 # --- 出题：题目卡片 + 答题 + AI 评分 ---
                 if st.session_state.get("_kb_qid") == doc_id:
-                    quiz = st.session_state.get("_kb_quiz")
+                    quiz = select_quiz_for_wrongbook(
+                        st.session_state.get("_kb_quiz"),
+                        st.session_state.get("_kb_last_quiz"),
+                    )
                     if st.session_state.get("_kb_result"):
                         st.markdown("### 评分结果")
                         st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_result))))
@@ -4993,17 +5280,15 @@ if st.session_state.page == "main":
                                 st.rerun()
                         with cc2:
                             if st.button("加入错题本", key=f"quiz_wb_{doc_id}"):
-                                # 用 _parse_quiz_block 分离题干+选项 / 答案+解析，避免把整个题目文本（含答案）塞进错题本
-                                _raw_q = quiz.get('questions', '') if quiz else ''
-                                _parsed = _parse_quiz_block(_raw_q)
-                                if _parsed:
-                                    _wb_q = _parsed['full_question']
-                                    _wb_c = _parsed['answer'] or ''
-                                    if _parsed['explain']:
-                                        _wb_c += ("\n\n解析：" + _parsed['explain']) if _wb_c else _parsed['explain']
-                                else:
-                                    _wb_q = _raw_q
-                                    _wb_c = st.session_state.get("_kb_result", "")
+                                _capture = build_wrongbook_capture(
+                                    (quiz or {}).get("questions", ""),
+                                    fallback_question=f"知识点练习：{clean_name}",
+                                    fallback_correct_answer=st.session_state.get("_kb_result", ""),
+                                )
+                                _wb_q = _capture["question"]
+                                _wb_c = _capture["correct_answer"]
+                                if _capture["explanation"]:
+                                    _wb_c += ("\n\n解析：" + _capture["explanation"]) if _wb_c else _capture["explanation"]
                                 st.session_state._wb_form = True
                                 st.session_state._wb_question = _wb_q
                                 st.session_state._wb_correct = _wb_c
@@ -5035,6 +5320,7 @@ if st.session_state.page == "main":
                                         display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
                                         save_feynman_record(st.session_state.get("user_id", 1), "problem", display_q, ans, result, sc, se, sa, total)
                                         st.session_state._kb_result = result
+                                        st.session_state._kb_last_quiz = quiz
                                         st.session_state._kb_quiz = None
                                         st.rerun()
                                     except Exception as e:
@@ -5417,7 +5703,7 @@ if st.session_state.page == "hub":
         with col:
             tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
             st.markdown(f"""
-            <div class="feature-card">
+            <div class="feature-card hub-feature-card">
                 <div class="card-icon {icon_cls}">{icon_svg}</div>
                 <div class="card-title">{title}</div>
                 <div class="card-desc">{desc}</div>
@@ -5428,42 +5714,37 @@ if st.session_state.page == "hub":
                 st.session_state.page = target
                 st.rerun()
 
-    # ── Row 3: 2 Wide Cards ──
-    wc1, wc2 = st.columns(2)
-
-    with wc1:
-        st.markdown("""
-        <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
-            <div class="card-icon icon-mat" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
-            <div style="flex:1;">
-                <div class="card-title">学习资料生成</div>
-                <div class="card-desc">AI 生成习题册 · 知识点整理 · DOCX 导出</div>
-                <div class="card-tags" style="margin-top:6px;">
-                    <span class="card-tag">习题生成</span><span class="card-tag">模考卷</span><span class="card-tag">DOCX</span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("进入学习资料生成", key="hub_material", use_container_width=True):
-            st.session_state.page = "material"
-            st.rerun()
-
-    with wc2:
-        st.markdown("""
-        <div class="feature-card" style="display:flex;align-items:center;gap:16px;">
-            <div class="card-icon icon-ck" style="width:48px;height:48px;margin-bottom:0;flex-shrink:0;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
-            <div style="flex:1;">
-                <div class="card-title">打卡督学</div>
-                <div class="card-desc">每日打卡 · 学习计划 · 学习日记 · 番茄计时 · 学习画像</div>
-                <div class="card-tags" style="margin-top:6px;">
-                    <span class="card-tag">打卡</span><span class="card-tag">番茄钟</span><span class="card-tag">日记</span><span class="card-tag">画像</span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("进入打卡督学", key="hub_checkin", use_container_width=True):
-            st.session_state.page = "checkin"
-            st.rerun()
+    # ── Row 3: 4 Feature Cards ──
+    wc1, wc2, wc3, wc4 = st.columns(4)
+    _card_data2 = [
+        ("material", "icon-mat", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>""",
+         "学习资料生成", "AI 生成习题册 · 知识点整理 · 模考卷 · DOCX 导出",
+         ["习题生成", "模考卷", "知识点", "DOCX"], "material"),
+        ("checkin", "icon-ck", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>""",
+         "打卡督学", "每日打卡 · 学习计划 · 学习日记 · 番茄计时 · 学习画像",
+         ["打卡", "番茄钟", "日记", "画像"], "checkin"),
+        ("professional_kb", "icon-pro", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>""",
+         "专业课", "专业知识库 · OCR 识别 · 智能出题 · 向量检索",
+         ["知识库", "OCR", "出题", "检索"], "professional_kb"),
+        ("wrongbook", "icon-wb", """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>""",
+         "错题本", "错题收集 · 分类管理 · AI 解析 · 针对性复习",
+         ["错题", "AI解析", "分类", "复习"], "wrongbook"),
+    ]
+    for col, (key, icon_cls, icon_svg, title, desc, tags, target) in zip(
+        [wc1, wc2, wc3, wc4], _card_data2
+    ):
+        with col:
+            tags_html = "".join(f'<span class="card-tag">{t}</span>' for t in tags) if tags else ""
+            st.markdown(f"""
+            <div class="feature-card hub-feature-card">
+                <div class="card-icon {icon_cls}">{icon_svg}</div>
+                <div class="card-title">{title}</div>
+                <div class="card-desc">{desc}</div>
+                {f'<div class="card-tags">{tags_html}</div>' if tags_html else ''}
+            </div>""", unsafe_allow_html=True)
+            if st.button("进入", key=f"hub_{key}", use_container_width=True):
+                st.session_state.page = target
+                st.rerun()
 
     st.stop()
 
@@ -7300,11 +7581,9 @@ with left_col:
     st.markdown("### 👤 当前用户")
     st.markdown(f"**{st.session_state.get('username','?')}**")
     if st.button("🚪 退出登录", use_container_width=True):
-        clear_login_token(st.session_state.get("user_id", 0))
+        revoke_login_session(cookie_manager.get("auth_token"))
         cookie_manager.delete("auth_token")
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.page = "hub"
+        clear_user_session_state()
         st.rerun()
 
     st.markdown("---")
@@ -7466,6 +7745,7 @@ with mid_col:
     # 出题结果显示
     btn_quiz = st.session_state.pop("_btn_quiz", None)
     if btn_quiz and btn_quiz.get("success"):
+        st.session_state._last_generated_quiz = btn_quiz
         st.markdown("#### 练习题")
         render_qa_cards(btn_quiz['questions'], columns=2, typing=True)
 
@@ -7478,6 +7758,7 @@ with mid_col:
             if matched:
                 progress_bar = st.progress(0, text="🎲 开始生成题目...")
                 progress_bar.progress(30, text="正在分析知识点...")
+                st.session_state._last_generated_quiz = None
                 st.session_state._btn_quiz = generate_review_questions([{"knowledge_id": m} for m in matched[:2]])
                 progress_bar.progress(100, text="题目生成完成！")
                 st.rerun()
@@ -7524,17 +7805,18 @@ with mid_col:
                 st.rerun()
         with col3:
             if st.button("加入错题本", use_container_width=True):
-                # 尝试用 _parse_quiz_block 解析选择题格式，分离题干/选项和答案/解析
-                _raw_q = st.session_state.get("_last_query", "")
-                _parsed = _parse_quiz_block(_raw_q)
-                if _parsed:
-                    _wb_q = _parsed['full_question']
-                    _wb_c = _parsed['answer'] or ''
-                    if _parsed['explain']:
-                        _wb_c += ("\n\n解析：" + _parsed['explain']) if _wb_c else _parsed['explain']
-                else:
-                    _wb_q = _raw_q
-                    _wb_c = st.session_state.get("_last_answer_text", "")
+                _quiz = select_quiz_for_wrongbook(
+                    st.session_state.get("_last_generated_quiz"),
+                )
+                _capture = build_wrongbook_capture(
+                    (_quiz or {}).get("questions", ""),
+                    fallback_question=st.session_state.get("_last_query", ""),
+                    fallback_correct_answer=st.session_state.get("_last_answer_text", ""),
+                )
+                _wb_q = _capture["question"]
+                _wb_c = _capture["correct_answer"]
+                if _capture["explanation"]:
+                    _wb_c += ("\n\n解析：" + _capture["explanation"]) if _wb_c else _capture["explanation"]
                 st.session_state._wb_form = True
                 st.session_state._wb_form_fresh = False
                 st.session_state._wb_question = _wb_q
@@ -7575,6 +7857,7 @@ with tab1:
                 with c1:
                     if st.button("🎲 出题", key=f"kb_s_{kid}", use_container_width=True):
                         _bar = st.progress(0, text="AI 正在出题思考中...")
+                        st.session_state._kb_last_quiz = None
                         st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
                         _bar.progress(100, text="完成")
                         st.session_state._kb_qid = kid
@@ -7584,7 +7867,10 @@ with tab1:
                         st.session_state._kb_concept_qid = kid
                         st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
-                    quiz = st.session_state.get("_kb_quiz")
+                    quiz = select_quiz_for_wrongbook(
+                        st.session_state.get("_kb_quiz"),
+                        st.session_state.get("_kb_last_quiz"),
+                    )
                     if st.session_state.get("_kb_result"):
                         st.markdown("### 评分结果")
                         st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_result))))
@@ -7616,6 +7902,7 @@ with tab1:
                                         display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
                                         save_feynman_record(st.session_state.get("user_id"), "problem", display_q, ans, result, sc, se, sa, total)
                                         st.session_state._kb_result = result
+                                        st.session_state._kb_last_quiz = quiz
                                         st.session_state._kb_quiz = None
                                         st.rerun()
                                     except Exception as e:
@@ -7668,6 +7955,7 @@ with tab1:
                 with c1:
                     if st.button("🎲 出题", key=f"kb_d_{kid}", use_container_width=True):
                         _bar = st.progress(0, text="AI 正在出题思考中...")
+                        st.session_state._kb_last_quiz = None
                         st.session_state._kb_quiz = generate_review_questions([{"knowledge_id": kid}])
                         _bar.progress(100, text="完成")
                         st.session_state._kb_qid = kid
@@ -7677,7 +7965,10 @@ with tab1:
                         st.session_state._kb_concept_qid = kid
                         st.rerun()
                 if st.session_state.get("_kb_qid") == kid:
-                    quiz = st.session_state.get("_kb_quiz")
+                    quiz = select_quiz_for_wrongbook(
+                        st.session_state.get("_kb_quiz"),
+                        st.session_state.get("_kb_last_quiz"),
+                    )
                     if st.session_state.get("_kb_result"):
                         st.markdown("### 评分结果")
                         st.markdown(_escape_md(_collapse_math(_fix_latex(st.session_state._kb_result))))
@@ -7709,6 +8000,7 @@ with tab1:
                                         display_q = qm.group(1).strip()[:300] if qm else q_raw[:300]
                                         save_feynman_record(st.session_state.get("user_id"), "problem", display_q, ans, result, sc, se, sa, total)
                                         st.session_state._kb_result = result
+                                        st.session_state._kb_last_quiz = quiz
                                         st.session_state._kb_quiz = None
                                         st.rerun()
                                     except Exception as e:

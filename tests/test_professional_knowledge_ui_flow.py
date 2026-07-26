@@ -52,6 +52,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.original_wrong_question_db = wrong_question_repo.MEMORY_DB
         self.original_custom_config = catalog.CUSTOM_SUBJECTS_CONFIG_PATH
         self.original_tasks_dir = task_service.TASKS_DIR
+        self.original_stream_call = knowledge_base._call_llm_api_stream
         self.original_llm_call = knowledge_base._call_llm_api
 
         knowledge_base.MEMORY_DB = str(self.db_path)
@@ -65,6 +66,7 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.catalog.CUSTOM_SUBJECTS_CONFIG_PATH = self.original_custom_config
         self.task_service.TASKS_DIR = self.original_tasks_dir
         self.knowledge_base._call_llm_api = self.original_llm_call
+        self.knowledge_base._call_llm_api_stream = self.original_stream_call
         if self.original_memory_db_env is None:
             os.environ.pop("MEMORY_DB", None)
         else:
@@ -324,6 +326,17 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
             )
 
         self.knowledge_base._call_llm_api = fake_llm
+
+        def fake_stream(prompt, **kwargs):
+            on_progress = kwargs.get("on_progress")
+            if on_progress:
+                on_progress("request_started", {})
+            raw = fake_llm(prompt, **kwargs)
+            if on_progress:
+                on_progress("streaming", {"received_chars": len(raw)})
+            return raw
+
+        self.knowledge_base._call_llm_api_stream = fake_stream
         return calls
 
     @staticmethod
@@ -479,6 +492,39 @@ class ProfessionalKnowledgeUiFlowTests(unittest.TestCase):
         self.assertTrue(self._markdown_contains(app, "B 树和 B+ 树是多路平衡查找树"))
         self.assertTrue(self._markdown_contains(app, "掌握标准"))
         self.assertFalse(self._markdown_contains(app, "真题风格例题"))
+
+    def test_generated_question_can_be_added_to_wrongbook(self):
+        self._enable_fake_professional_ai()
+        app = self._run_app()
+
+        _find_by_label(app.button, "出题", occurrence=0).click().run()
+        if app.exception:
+            raise AssertionError(app.exception)
+
+        _find_by_label(app.button, "加入错题本", occurrence=0).click().run()
+        if app.exception:
+            raise AssertionError(app.exception)
+
+        self.assertTrue(
+            any("添加成功" in str(item.value) for item in app.success)
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """SELECT subject, chapter_name, question, correct_answer,
+                          explanation, source_file_type, tags_json
+                   FROM user_wrong_questions
+                   WHERE user_id=?
+                   ORDER BY id DESC
+                   LIMIT 1""",
+                (1,),
+            ).fetchone()
+
+        self.assertIsNotNone(row)
+        self.assertIn("A->C", row[2])
+        self.assertTrue(row[3] or row[4])
+        self.assertEqual(row[5], "generated")
+        self.assertIn("AI出题", row[6])
 
     def test_quiz_panel_appears_under_selected_knowledge(self):
         self._enable_fake_professional_ai()
