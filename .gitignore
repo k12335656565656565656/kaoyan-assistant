@@ -38,6 +38,7 @@ test_*.py
 temp/
 tmp/
 output/
+backups/
 data/archive/
 
 # 部署同步脚本

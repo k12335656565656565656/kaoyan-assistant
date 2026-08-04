@@ -1745,10 +1745,97 @@ def log_visit(action, detail=""):
         username = st.session_state.get("username", "anon")
         c.execute("INSERT INTO visit_log (username, action, detail) VALUES (?, ?, ?)",
                   (username, action, detail[:200]))
+        visit_id = c.lastrowid
         conn.commit()
         conn.close()
+        return visit_id
     except:
-        pass
+        return None
+
+
+def _ensure_admin_analytics_schema(conn):
+    """Keep PR #24 analytics tables available on installations not yet migrated."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS question_analysis (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            visit_log_id INTEGER UNIQUE,
+            question_text TEXT NOT NULL,
+            subject TEXT DEFAULT '',
+            chapter TEXT DEFAULT '',
+            knowledge_point TEXT DEFAULT '',
+            difficulty TEXT DEFAULT '未分类',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS rag_record (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question_id INTEGER,
+            retrieved_docs TEXT DEFAULT '',
+            top_similarity REAL DEFAULT 0.0,
+            answer_text TEXT DEFAULT '',
+            response_time_ms INTEGER DEFAULT 0,
+            token_used INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS classification_cache (
+            question_hash TEXT PRIMARY KEY,
+            subject TEXT,
+            chapter TEXT,
+            knowledge_point TEXT,
+            difficulty TEXT,
+            classified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+
+def _record_admin_analytics(visit_id, question_text, output, docs, response_time_ms):
+    """Persist best-effort analytics without changing the answer shown to users."""
+    if not visit_id:
+        return
+    try:
+        conn = sqlite3.connect(MEMORY_DB)
+        _ensure_admin_analytics_schema(conn)
+        output = output or {}
+        knowledge = output.get("knowledge") or []
+        knowledge_text = "、".join(str(item).strip() for item in knowledge if str(item).strip())
+        subject = "数学" if output.get("qtype") == "math" else str(output.get("qtype") or "")
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO question_analysis
+               (visit_log_id, question_text, subject, knowledge_point)
+               VALUES (?, ?, ?, ?)""",
+            (visit_id, str(question_text or "")[:4000], subject, knowledge_text[:1000]),
+        )
+        question_row = conn.execute(
+            "SELECT id FROM question_analysis WHERE visit_log_id=?", (visit_id,)
+        ).fetchone()
+        if question_row:
+            conn.execute(
+                """INSERT INTO rag_record
+                   (question_id, retrieved_docs, answer_text, response_time_ms)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    question_row[0],
+                    json.dumps([str(doc.get("id", "")) for doc in (docs or [])], ensure_ascii=False),
+                    str(output.get("answer") or "")[:8000],
+                    max(0, int(response_time_ms or 0)),
+                ),
+            )
+        question_hash = hashlib.sha256(str(question_text or "").encode("utf-8")).hexdigest()
+        conn.execute(
+            """INSERT OR REPLACE INTO classification_cache
+               (question_hash, subject, knowledge_point)
+               VALUES (?, ?, ?)""",
+            (question_hash, subject, knowledge_text[:1000]),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        # Analytics must never make the learning workflow fail.
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 # ==================== 打卡督学模块 ====================
 
@@ -4564,7 +4651,7 @@ _qp = st.query_params if hasattr(st, "query_params") else st.experimental_get_qu
 # ── 普通链接导航：避免公网加载时 st.button 骨架屏导致入口不可点 ──
 _VALID_PAGES = {
     "hub", "main", "professional_kb", "english", "checkin",
-    "popularity", "material", "suggest", "wrongbook",
+    "popularity", "material", "suggest", "wrongbook", "exam_goal",
 }
 _nav = _qp.get("page", "") or _qp.get("nav", "")
 if isinstance(_nav, list):
@@ -4644,6 +4731,7 @@ with st.sidebar:
     # 导航分组 2: 辅助工具
     st.markdown('<div class="sidebar-section-label">辅助工具</div>', unsafe_allow_html=True)
     _group2 = [
+        ("exam_goal", "我的备考目标"),
         ("popularity","高校热度"),
         ("material", "学习资料"),
         ("suggest",  "提建议"),
@@ -4886,6 +4974,59 @@ if st.session_state.page == "professional_kb":
     )
     st.stop()
 
+# ==================== 我的备考目标 ====================
+if st.session_state.page == "exam_goal":
+    if st.button("← 返回首页", key="back_hub_exam_goal"):
+        st.session_state.page = "hub"
+        st.rerun()
+
+    _goal_conn = None
+    try:
+        from personalized_learning.repository import ensure_schema as _ensure_personalized_schema
+        from personalized_learning.streamlit_page import render_math_personalization_page
+
+        init_memory_db()
+        _goal_conn = sqlite3.connect(MEMORY_DB)
+        _ensure_personalized_schema(_goal_conn)
+        _goal_corpus = load_corpus()
+        _goal_points = [
+            {
+                "id": item.get("id", ""),
+                "name": _clean_knowledge_name(item.get("id", "")),
+                "text": item.get("text", ""),
+            }
+            for item in _goal_corpus
+            if item.get("id")
+        ]
+
+        render_math_personalization_page(
+            st=st,
+            connection=_goal_conn,
+            user_id=st.session_state.get("user_id"),
+            knowledge_points=_goal_points,
+            generate_review_questions=generate_review_questions,
+            generate_training_material=lambda prompt: call_llm_api(
+                prompt, model=MODEL_NAME, max_tokens=3000, temperature=0.3
+            ),
+            generate_diagnosis_variants=lambda prompt: call_llm_api(
+                prompt, model=MODEL_NAME, max_tokens=8000, temperature=0.25
+            ),
+            generate_diagnosis_summary=lambda prompt: call_llm_api(
+                prompt, model=MODEL_NAME, max_tokens=1800, temperature=0.2
+            ),
+            render_generation_progress=_render_math_question_progress,
+        )
+    except Exception as _math_goal_error:
+        st.error(f"备考目标模块暂时无法加载：{_brief_llm_error(_math_goal_error)}")
+        st.caption("原数学问答功能没有被替换，你仍可以从侧栏进入数学问答。")
+        if st.button("进入数学问答", key="math_goal_fallback"):
+            st.session_state.page = "main"
+            st.rerun()
+    finally:
+        if _goal_conn is not None:
+            _goal_conn.close()
+    st.stop()
+
 # ==================== 数学问答 ====================
 if st.session_state.page == "main":
     if st.button("← 返回首页", key="back_hub_math"):
@@ -5055,6 +5196,7 @@ if st.session_state.page == "main":
             thinking_placeholder.markdown("AI 正在思考...")
 
             output = None
+            _analytics_started = time.perf_counter()
             for event in run_pipeline(user_input, docs, MODEL_NAME, img_data=_ocr_img_b64):
                 if event["type"] == "done":
                     output = event["result"]
@@ -5079,7 +5221,14 @@ if st.session_state.page == "main":
                 st.session_state._last_answer_text = ""
             st.markdown('</div>', unsafe_allow_html=True)
             add_thinking("回答完成")
-            log_visit("提问", user_input[:50])
+            _visit_id = log_visit("提问", user_input[:50])
+            _record_admin_analytics(
+                _visit_id,
+                user_input,
+                output,
+                docs,
+                int((time.perf_counter() - _analytics_started) * 1000),
+            )
 
             # 知识点归纳
             if output and output.get("knowledge"):
