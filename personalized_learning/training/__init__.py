@@ -1,0 +1,1 @@
+"""Training material request contracts."""

@@ -347,6 +347,7 @@ st.markdown("""
     .st-key-nav_english button:active, .st-key-nav_checkin button:active,
     .st-key-nav_popularity button:active, .st-key-nav_material button:active,
     .st-key-nav_suggest button:active,
+    .st-key-nav_exam_goal button:active,
     .st-key-nav_wrongbook button:active {
         transform: scale(0.96) !important;
         transition: transform 0.1s ease !important;
@@ -365,6 +366,7 @@ st.markdown("""
     .st-key-nav_popularity button::before,
     .st-key-nav_material button::before,
     .st-key-nav_suggest button::before,
+    .st-key-nav_exam_goal button::before,
     .st-key-nav_wrongbook button::before {
         content: '';
         display: inline-block; width: 8px; height: 8px; border-radius: 50%;
@@ -379,6 +381,7 @@ st.markdown("""
     .st-key-nav_popularity button::before { background: #db2777; box-shadow: 0 0 6px rgba(219,39,119,0.4); }
     .st-key-nav_material button::before   { background: #ca8a04; box-shadow: 0 0 6px rgba(202,138,4,0.4); }
     .st-key-nav_suggest button::before    { background: #0284c7; box-shadow: 0 0 6px rgba(2,132,199,0.4); }
+    .st-key-nav_exam_goal button::before  { background: #ea580c; box-shadow: 0 0 6px rgba(234,88,12,0.4); }
     .st-key-nav_wrongbook button::before  { background: #7c3aed; box-shadow: 0 0 6px rgba(124,58,237,0.4); }
 
     /* Active nav-item dot — glowing */
@@ -387,11 +390,16 @@ st.markdown("""
         box-shadow: 0 0 8px rgba(79,70,229,0.5);
         animation: navDotPulse 1.8s ease-in-out infinite;
     }
+    .nav-item-active[data-nav="exam_goal"] .nav-dot {
+        background: #ea580c !important;
+        box-shadow: 0 0 8px rgba(234,88,12,0.5);
+    }
 
     /* Sidebar buttons — match nav-item font + style */
     .st-key-nav_hub button, .st-key-nav_main button, .st-key-nav_professional_kb button, .st-key-nav_english button,
     .st-key-nav_checkin button, .st-key-nav_popularity button,
     .st-key-nav_material button, .st-key-nav_suggest button,
+    .st-key-nav_exam_goal button,
     .st-key-nav_wrongbook button {
         background: transparent !important; color: #64748b !important;
         border: none !important; border-radius: 10px !important;
@@ -408,6 +416,7 @@ st.markdown("""
     .st-key-nav_english button:hover, .st-key-nav_checkin button:hover,
     .st-key-nav_popularity button:hover, .st-key-nav_material button:hover,
     .st-key-nav_suggest button:hover,
+    .st-key-nav_exam_goal button:hover,
     .st-key-nav_wrongbook button:hover {
         background: #f1f5f9 !important; color: #4f46e5 !important;
         transform: translateX(3px) !important;
