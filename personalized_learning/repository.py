@@ -291,6 +291,40 @@ def import_exam_questions(
     return {"imported": imported, "skipped": skipped}
 
 
+def seed_question_bank_from_file(
+    connection: sqlite3.Connection,
+    path: Path,
+):
+    """Import a tracked question-bank JSON file without duplicating rows."""
+    source_path = Path(path)
+    if not source_path.exists():
+        return {"imported": 0, "skipped": 0, "missing": True}
+
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("questions"), list):
+        raise ValueError(f"Invalid question bank format: {source_path}")
+
+    exam_type = str(payload.get("exam_type") or "").strip()
+    if not exam_type:
+        raise ValueError(f"Question bank is missing exam_type: {source_path}")
+    rows_by_version = {}
+    for row in payload["questions"]:
+        if not isinstance(row, Mapping) or str(row.get("exam_type") or "").strip() != exam_type:
+            raise ValueError(f"Question bank contains an invalid exam_type: {source_path}")
+        data_version = str(row.get("data_version") or "").strip()
+        if not data_version:
+            raise ValueError(f"Question bank row is missing data_version: {source_path}")
+        rows_by_version.setdefault(data_version, []).append(row)
+
+    imported = 0
+    skipped = 0
+    for data_version, rows in rows_by_version.items():
+        result = import_exam_questions(connection, rows, data_version=data_version)
+        imported += result["imported"]
+        skipped += result["skipped"]
+    return {"imported": imported, "skipped": skipped, "missing": False}
+
+
 def refresh_provisional_question_mappings(
     connection: sqlite3.Connection,
     rows: Iterable[object],

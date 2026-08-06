@@ -4,6 +4,7 @@ import html
 import math
 import re
 from fractions import Fraction
+from pathlib import Path
 from uuid import uuid4
 from collections import OrderedDict
 from typing import Iterable, Mapping, Sequence
@@ -26,6 +27,7 @@ from .repository import (
     repair_legacy_question_mapping_ids,
     save_evidence,
     save_profile,
+    seed_question_bank_from_file,
 )
 from .training.material_generator import (
     build_training_material_prompt,
@@ -34,6 +36,7 @@ from .training.material_generator import (
 
 
 EXAM_TYPES = OrderedDict((("数学一", "math1"), ("数学二", "math2"), ("数学三", "math3")))
+MATH1_QUESTION_BANK_PATH = Path(__file__).resolve().parents[1] / "data" / "math_exam_question_bank_math1.json"
 
 
 def resolve_math_exam_type(connection, user_id, profile=None):
@@ -743,6 +746,7 @@ def render_math_personalization_page(
     """Render the goal overview and the local, reusable math diagnosis workflow."""
     del generate_review_questions
     ensure_schema(connection)
+    seed_question_bank_from_file(connection, MATH1_QUESTION_BANK_PATH)
     repaired = repair_legacy_question_mapping_ids(
         connection,
         tuple(point.get("id", "") for point in knowledge_points),
