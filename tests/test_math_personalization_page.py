@@ -6,8 +6,11 @@ from personalized_learning.streamlit_page import (
     _training_requirement_labels,
     choose_diagnosis_knowledge_points,
     count_diagnosis_questions,
+    generate_training_material_content,
     parse_generated_quiz,
 )
+from personalized_learning.models import PersonalizedRequirement
+from personalized_learning.training.material_generator import build_training_material_request
 
 
 class MathPersonalizationPageTests(unittest.TestCase):
@@ -156,6 +159,79 @@ class MathPersonalizationPageTests(unittest.TestCase):
 
         self.assertEqual(labels[0], "01 · high · 标准 · 优先级 2.80")
         self.assertEqual(labels[1], "02 · low · 基础 · 优先级 0.40")
+
+    def test_training_material_generation_returns_content_and_prompt_context(self):
+        requirement = PersonalizedRequirement(
+            knowledge_point_id="limit",
+            tier="基础",
+            mastery=0.2,
+            target_mastery=0.8,
+            gap=0.6,
+            expected_contribution=5.0,
+            priority=2.0,
+            forgetting_risk=0.3,
+            reason="近期错误较多",
+            evidence_summary={"times_wrong": 2},
+        )
+        request = build_training_material_request(requirement)
+        prompts = []
+
+        def generator(prompt):
+            prompts.append(prompt)
+            return "# 核心定义\n极限的定义"
+
+        content, error = generate_training_material_content(generator, request, "极限知识点原文")
+
+        self.assertEqual(error, "")
+        self.assertEqual(content, "# 核心定义\n极限的定义")
+        self.assertIn("极限知识点原文", prompts[0])
+
+    def test_training_material_generation_converts_failures_to_user_visible_error(self):
+        requirement = PersonalizedRequirement(
+            knowledge_point_id="limit",
+            tier="基础",
+            mastery=0.2,
+            target_mastery=0.8,
+            gap=0.6,
+            expected_contribution=5.0,
+            priority=2.0,
+            forgetting_risk=0.3,
+            reason="近期错误较多",
+        )
+        request = build_training_material_request(requirement)
+
+        content, error = generate_training_material_content(
+            lambda prompt: (_ for _ in ()).throw(RuntimeError("HTTP 402")),
+            request,
+            "极限知识点原文",
+        )
+
+        self.assertEqual(content, "")
+        self.assertIn("HTTP 402", error)
+
+    def test_training_material_generation_explains_local_socket_permission_error(self):
+        requirement = PersonalizedRequirement(
+            knowledge_point_id="limit",
+            tier="基础",
+            mastery=0.2,
+            target_mastery=0.8,
+            gap=0.6,
+            expected_contribution=5.0,
+            priority=2.0,
+            forgetting_risk=0.3,
+            reason="近期错误较多",
+        )
+        request = build_training_material_request(requirement)
+
+        content, error = generate_training_material_content(
+            lambda prompt: (_ for _ in ()).throw(PermissionError(10013, "blocked")),
+            request,
+            "极限知识点原文",
+        )
+
+        self.assertEqual(content, "")
+        self.assertIn("Windows 防火墙", error)
+        self.assertIn("10013", error)
 
 
 if __name__ == "__main__":

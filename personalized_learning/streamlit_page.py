@@ -505,6 +505,41 @@ def format_question_metadata(year, difficulty_tier, mapping_status, knowledge_po
     }
 
 
+def _format_training_material_error(error):
+    """Turn local network permission failures into an actionable UI message."""
+    reason = getattr(error, "reason", None)
+    candidates = (error, reason)
+    if any(
+        getattr(candidate, "winerror", None) == 10013
+        or getattr(candidate, "errno", None) == 10013
+        or (getattr(candidate, "args", ()) and candidate.args[0] == 10013)
+        or "[WinError 10013]" in str(candidate)
+        for candidate in candidates
+        if candidate is not None
+    ):
+        return (
+            "强化资料生成失败：Windows 禁止当前程序建立到大模型服务的网络连接（WinError 10013）。"
+            "请检查 Windows 防火墙或安全软件是否拦截 Python，确认网络或代理配置后重试。"
+        )
+    return f"强化资料生成失败：{error}"
+
+
+def generate_training_material_content(generator, request, knowledge_text):
+    """Build and execute one training request without letting provider errors break the page."""
+    if not callable(generator):
+        return "", "强化资料生成器未配置。"
+    try:
+        result = generator(build_training_material_prompt(request, knowledge_text))
+    except Exception as error:
+        return "", _format_training_material_error(error)
+    if isinstance(result, Mapping):
+        result = result.get("content") or result.get("text") or result.get("answer") or ""
+    content = str(result or "").strip()
+    if not content:
+        return "", "强化资料生成失败：大模型返回了空内容。"
+    return content, ""
+
+
 def _render_math_workspace(st, connection, user_key, profile, knowledge_points, generate_training_material, generate_diagnosis_variants, generate_diagnosis_summary, render_generation_progress):
     evidence = list_evidence(connection, user_key, profile.exam_type)
     mastery = calculate_mastery(evidence)
@@ -724,10 +759,19 @@ def _render_math_workspace(st, connection, user_key, profile, knowledge_points, 
     labels = list(_training_requirement_labels(selected_group))
     selected_label = st.selectbox("选择强化知识点", labels, key="math_training_requirement")
     selected = selected_group[labels.index(selected_label)]
-    if st.button("生成强化资料", type="primary", key="generate_math_training_material") and generate_training_material:
+    if st.button("生成强化资料", type="primary", key="generate_math_training_material"):
         request = build_training_material_request(selected)
         text = next((point.get("text", "") for point in knowledge_points if point.get("id") == request.knowledge_point_id), "")
-        st.session_state.math_training_material = generate_training_material(build_training_material_prompt(request, text))
+        with st.spinner("正在生成强化资料..."):
+            content, error = generate_training_material_content(generate_training_material, request, text)
+        if error:
+            st.session_state.pop("math_training_material", None)
+            st.session_state.math_training_material_error = error
+        else:
+            st.session_state.math_training_material = content
+            st.session_state.pop("math_training_material_error", None)
+    if st.session_state.get("math_training_material_error"):
+        st.error(st.session_state.math_training_material_error)
     if st.session_state.get("math_training_material"):
         st.markdown(st.session_state.math_training_material)
 
