@@ -62,12 +62,16 @@ class AuthCookieTests(unittest.TestCase):
 
     def test_login_flow_does_not_rerun_before_cookie_component_can_flush(self):
         app_source = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
-        login_section = app_source.split("    with tab_login:", 1)[1].split(
+        auth_section = app_source.split("    with tab_login:", 1)[1].split(
             "    st.stop()", 1
         )[0]
+        login_section = auth_section.split("        guest_col, guest_note_col", 1)[0]
+        register_section = auth_section.split("    with tab_register:", 1)[1]
 
-        self.assertEqual(login_section.count("cookie_manager.set("), 2)
+        self.assertEqual(login_section.count("cookie_manager.set("), 1)
+        self.assertEqual(register_section.count("cookie_manager.set("), 1)
         self.assertNotIn("st.rerun()", login_section)
+        self.assertNotIn("st.rerun()", register_section)
 
 
 if __name__ == "__main__":

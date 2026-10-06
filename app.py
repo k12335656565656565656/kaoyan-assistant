@@ -15,10 +15,12 @@ from pathlib import Path
 from datetime import datetime, date, timedelta
 import urllib.request
 import urllib.error
+from urllib.parse import urlencode
 import re
 import traceback
 import secrets
 import hashlib
+import hmac
 import io
 import kaoyan_predict
 from recommend import generate_recommendation
@@ -55,7 +57,42 @@ st.set_page_config(page_title="考研学习助手", page_icon="", layout="wide",
 API_KEY = os.environ.get("AI_API_KEY", "").strip()
 API_BASE = os.environ.get("AI_API_BASE", "https://api.xiaomimimo.com/v1").strip()
 MODEL_NAME = os.environ.get("AI_MODEL", "mimo-v2.5").strip() or "mimo-v2.5"
+# 英语作文批改使用独立的 Coding Plan。兼容 en-sense-trainer 的 LLM_* 配置，
+# 但不会回退到 MiMo 的 AI_API_KEY，避免把请求误发到主 API。
+CODING_API_KEY = os.environ.get("CODING_API_KEY", os.environ.get("LLM_API_KEY", "")).strip()
+CODING_API_BASE = os.environ.get(
+    "CODING_API_BASE",
+    os.environ.get("LLM_BASE_URL", "https://open.bigmodel.cn/api/anthropic"),
+).strip().rstrip("/")
+CODING_MODEL = os.environ.get("CODING_MODEL", os.environ.get("LLM_MODEL", "glm-4.6")).strip() or "glm-4.6"
 UMI_OCR_URL = os.environ.get("UMI_OCR_URL", "http://localhost:1224")
+WRITING_TRAINER_URL = os.environ.get("WRITING_TRAINER_URL", "http://localhost:8787/").strip() or "http://localhost:8787/"
+WRITING_SSO_SECRET = os.environ.get("WRITING_SSO_SECRET", "").strip()
+if not WRITING_SSO_SECRET and WRITING_TRAINER_URL.startswith(("http://localhost", "http://127.0.0.1")):
+    WRITING_SSO_SECRET = "local-dev-only-writing-sso-secret"
+
+
+def build_writing_trainer_url():
+    """将当前主站身份以短期签名声明传给英语训练器。"""
+    if not WRITING_SSO_SECRET:
+        return WRITING_TRAINER_URL
+    mode = "guest" if is_guest_mode() else "user"
+    user_id = int(st.session_state.get("user_id") or 0)
+    username = str(st.session_state.get("username") or "游客用户")
+    issued_at = int(time.time())
+    payload = f"{mode}|{user_id}|{username}|{issued_at}"
+    signature = hmac.new(
+        WRITING_SSO_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    query = urlencode({
+        "sso_mode": mode,
+        "sso_user_id": user_id,
+        "sso_username": username,
+        "sso_ts": issued_at,
+        "sso_sig": signature,
+    })
+    separator = "&" if "?" in WRITING_TRAINER_URL else "?"
+    return f"{WRITING_TRAINER_URL}{separator}{query}"
 
 
 def _resolved_model_name(model_name=None):
@@ -90,6 +127,64 @@ def _request_llm_message(payload, *, timeout=90):
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]
+
+
+def call_coding_plan(prompt, *, max_tokens=3000, temperature=0.3):
+    """调用 Coding Plan（支持 GLM 的 Anthropic 或 OpenAI 兼容端点）。"""
+    if not CODING_API_KEY:
+        raise RuntimeError(
+            "英语作文批改需要 Coding Plan 配置，请在 .env 设置 CODING_API_KEY "
+            "（或兼容 en-sense-trainer 的 LLM_API_KEY）。"
+        )
+
+    is_anthropic = CODING_API_BASE.endswith("/anthropic")
+    if is_anthropic:
+        endpoint = CODING_API_BASE + "/v1/messages"
+        payload = {
+            "model": CODING_MODEL,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": CODING_API_KEY,
+            "Authorization": f"Bearer {CODING_API_KEY}",
+            "anthropic-version": "2023-06-01",
+        }
+    else:
+        endpoint = CODING_API_BASE + "/chat/completions"
+        payload = {
+            "model": CODING_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {CODING_API_KEY}",
+        }
+
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        response = json.loads(resp.read().decode("utf-8"))
+
+    if is_anthropic:
+        content = "".join(
+            block.get("text", "")
+            for block in response.get("content", [])
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    else:
+        content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("Coding Plan 返回了空答案")
+    return content.strip()
 
 
 def _brief_llm_error(error):
@@ -981,6 +1076,22 @@ st.markdown("""
     }
     div[data-testid="stFormSubmitButton"] button:hover { background: #4338ca !important; }
 
+    /* 登录页游客入口与登录按钮保持同一视觉层级 */
+    .st-key-guest_login button {
+        background: #4f46e5 !important; color: #ffffff !important;
+        border: none !important; border-radius: 24px !important;
+        font-weight: 600 !important; width: 100% !important;
+        box-shadow: none !important;
+        transition: background 0.2s ease, transform 0.2s ease !important;
+    }
+    .st-key-guest_login button p,
+    .st-key-guest_login button span { color: #ffffff !important; }
+    .st-key-guest_login button:hover {
+        background: #4338ca !important; color: #ffffff !important;
+        transform: translateY(-1px);
+    }
+    .st-key-guest_login button:active { transform: translateY(0) !important; }
+
     /* ── Progress bars ── */
     div[data-testid="stProgress"] > div > div { background: #4f46e5 !important; }
 
@@ -1182,6 +1293,7 @@ def clear_user_session_state():
         if key != "cookie_manager":
             del st.session_state[key]
     st.session_state.logged_in = False
+    st.session_state.guest_mode = False
     st.session_state.user_id = None
     st.session_state.username = None
     st.session_state.page = "hub"
@@ -1191,13 +1303,29 @@ def set_authenticated_user(user_info):
     """切换身份时先清理旧用户状态，再写入已验证的身份。"""
     clear_user_session_state()
     st.session_state.logged_in = True
+    st.session_state.guest_mode = False
     st.session_state.user_id = user_info["user_id"]
     st.session_state.username = user_info["username"]
+
+
+def set_guest_user():
+    """进入仅限当前 Streamlit 会话的游客身份，不创建账户或 Cookie。"""
+    clear_user_session_state()
+    st.session_state.logged_in = True
+    st.session_state.guest_mode = True
+    st.session_state.user_id = 0
+    st.session_state.username = "游客用户"
+
+
+def is_guest_mode():
+    return bool(st.session_state.get("guest_mode"))
 
 
 def require_authenticated_user_id():
     """返回当前已验证用户；绝不把缺失身份回退到默认用户。"""
     user_id = st.session_state.get("user_id")
+    if is_guest_mode() and st.session_state.get("logged_in"):
+        return 0
     if not st.session_state.get("logged_in") or not isinstance(user_id, int):
         raise RuntimeError("未认证用户不能访问或写入用户数据")
     return user_id
@@ -1272,6 +1400,19 @@ def read_file(p):
         except:
             return ""
 
+def _safe_md_truncate(text, limit=1500):
+    """截断文本时保持 $...$ LaTeX 配对完整，避免后续文字被渲染为数学斜体。"""
+    if not text or len(text) <= limit:
+        return text
+    truncated = text[:limit]
+    if truncated.count("$") % 2 == 1:
+        last_dollar = truncated.rfind("$")
+        truncated = truncated[:last_dollar].rstrip()
+    # 优先在换行处收尾，避免截断 Markdown 列表或表格行
+    if "\n" in truncated[-80:]:
+        truncated = truncated[: truncated.rfind("\n")].rstrip()
+    return truncated + "\n\n> *内容较长，已显示前半部分。*"
+
 @st.cache_data
 def load_corpus():
     docs = []
@@ -1321,7 +1462,7 @@ def search_corpus(query, corpus, top_k=3):
         text = doc["text"].lower()
         score = sum(text.count(w) for w in query_lower.split() if w)
         if score > 0:
-            results.append({"id": doc["id"], "score": score, "text": doc["text"][:500]})
+            results.append({"id": doc["id"], "score": score, "text": doc["text"]})
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:top_k]
 
@@ -1378,6 +1519,8 @@ def load_agent_experience():
     return ""
 
 def save_agent_experience(text):
+    if is_guest_mode():
+        return False
     exp_file = get_experience_file()
     try:
         exp_file.write_text(text, encoding="utf-8")
@@ -1866,6 +2009,8 @@ def checkin_fetch_all(query, params=()):
     return rows
 
 def save_checkin(user_id, checkin_date, subject, duration, completion, mood, notes):
+    if is_guest_mode():
+        return False
     conn = sqlite3.connect(MEMORY_DB)
     conn.execute(
         """INSERT INTO checkin_daily
@@ -1923,6 +2068,8 @@ def get_today_mood(user_id):
     return row["mood"] if row else "未打卡"
 
 def save_review(user_id, review_date, diary_content):
+    if is_guest_mode():
+        return False
     conn = sqlite3.connect(MEMORY_DB)
     conn.execute(
         """INSERT INTO checkin_review
@@ -1972,6 +2119,8 @@ def get_timeline(user_id, days=14):
     return all_items
 
 def save_checkin_plan(user_id, plan_name, target_date, tasks):
+    if is_guest_mode():
+        return False
     if isinstance(tasks, list):
         progress = calc_tasks_progress(tasks)
         tasks_json = json.dumps(tasks, ensure_ascii=False)
@@ -2197,6 +2346,8 @@ def calc_tasks_progress(tasks):
     return round(done_count / len(tasks) * 100, 1)
 
 def update_plan_tasks(user_id, plan_id, tasks):
+    if is_guest_mode():
+        return False
     progress = calc_tasks_progress(tasks)
     status = "completed" if tasks and progress >= 100 else "active"
     conn = sqlite3.connect(MEMORY_DB)
@@ -2207,6 +2358,8 @@ def update_plan_tasks(user_id, plan_id, tasks):
     conn.close()
 
 def delete_plan(user_id, plan_id):
+    if is_guest_mode():
+        return False
     conn = sqlite3.connect(MEMORY_DB)
     conn.execute("UPDATE checkin_plans SET status='abandoned' WHERE id=? AND user_id=?", (plan_id, user_id))
     conn.commit()
@@ -2221,6 +2374,8 @@ def get_checkin_plan_progress(user_id):
     return round(sum(float(row["progress"] or 0) for row in rows) / len(rows))
 
 def save_pomodoro(user_id, subject, duration, actual_minutes, completed):
+    if is_guest_mode():
+        return False
     conn = sqlite3.connect(MEMORY_DB)
     conn.execute(
         """INSERT INTO checkin_pomodoro (user_id, subject, duration_minutes, actual_minutes, completed)
@@ -2425,6 +2580,8 @@ def get_user_profile(user_id):
     return dict(zip(columns, row))
 
 def save_profile_field(user_id, field, value):
+    if is_guest_mode():
+        return False
     allowed = set(_profile_columns()) - {"id", "user_id", "created_at", "updated_at"}
     if field not in allowed:
         raise ValueError(f"非法字段: {field}")
@@ -2495,6 +2652,8 @@ def auto_generate_tags(user_id):
     return tags
 
 def update_profile_from_conversation(user_id, query, answer):
+    if is_guest_mode():
+        return False
     extracted = {}
     if API_KEY:
         prompt = f"""从以下对话中提取用户信息，返回 JSON 格式：
@@ -2600,6 +2759,8 @@ def calculate_daily_hours(daily_hours, math_type):
     return {sub: round(daily_hours * w, 1) for sub, w in weights.items()}
 
 def save_plan(user_id, plan_name, target_exam_date, math_type, daily_hours, weight_config, phase):
+    if is_guest_mode():
+        return False
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     now_str = datetime.now().strftime("%Y-%m-%d")
@@ -2612,6 +2773,8 @@ def save_plan(user_id, plan_name, target_exam_date, math_type, daily_hours, weig
     return plan_id
 
 def save_task(user_id, plan_id, task_type, subject, task_name, description, target_date, est_hours, priority=3):
+    if is_guest_mode():
+        return False
     conn = sqlite3.connect(MEMORY_DB)
     c = conn.cursor()
     now_str = datetime.now().strftime("%Y-%m-%d")
@@ -2632,6 +2795,8 @@ def get_user_tasks(user_id):
 
 def update_task_status(user_id_or_task_id, task_id_or_new_status, new_status=None):
     """Update one task, accepting both legacy and upstream call signatures safely."""
+    if is_guest_mode():
+        return False
     current_user_id = require_authenticated_user_id()
     if new_status is None:
         task_id = user_id_or_task_id
@@ -2818,6 +2983,8 @@ def needs_review(recall_prob, threshold=0.3):
 
 def save_feynman_record(user_id, mode, question_text, user_answer, ai_evaluation, score_correct, score_expression, score_authentic, total_score):
     """保存费曼学习法记录"""
+    if is_guest_mode():
+        return False
     conn = sqlite3.connect(MEMORY_DB)
     conn.execute(
         """INSERT INTO feynman_records
@@ -3242,6 +3409,8 @@ PROBLEM_EVAL_PROMPT = """你是考研数学辅导专家，同时也是教育心�
 {answer}"""
 
 def update_memory(kid, is_mastered, error_type="", mastery_score=0):
+    if is_guest_mode():
+        return False
     init_memory_db()
     uid = require_authenticated_user_id()
     conn = sqlite3.connect(MEMORY_DB)
@@ -3278,6 +3447,8 @@ def update_memory(kid, is_mastered, error_type="", mastery_score=0):
 
 def add_to_wrongbook(question, correct_answer, user_answer="", explanation="", subject=""):
     """通用：将错题写入 user_wrong_questions 表"""
+    if is_guest_mode():
+        return False
     uid = require_authenticated_user_id()
     init_memory_db()
     payload = {
@@ -3349,6 +3520,8 @@ def _extract_wrongbook_question_locally(question="", correct_answer="", user_ans
     return _clean_extracted_question(question)
 
 def _record_qa_knowledge(docs):
+    if is_guest_mode():
+        return
     uid = require_authenticated_user_id()
     try:
         init_memory_db()
@@ -3426,6 +3599,8 @@ def get_review_candidates():
 
 def create_review_challenge(user_id_or_kid, kid=None):
     """Create a review challenge with either supported call signature."""
+    if is_guest_mode():
+        return False
     current_user_id = require_authenticated_user_id()
     if kid is None:
         kid = user_id_or_kid
@@ -4565,6 +4740,8 @@ def smart_match_knowledge(query):
 # 登录状态
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
+if "guest_mode" not in st.session_state:
+    st.session_state.guest_mode = False
 if "page" not in st.session_state:
     st.session_state.page = "hub"
 
@@ -4572,29 +4749,32 @@ if "page" not in st.session_state:
 init_memory_db()
 
 # 每次 rerun 都以 Cookie 会话为准，不能信任可能残留的 session_state 身份。
-cookie_token = read_cookie_value(cookie_manager, "auth_token")
-token = select_auth_token(
-    cookie_token,
-    st.session_state.get("_auth_session_token"),
-)
-user_info = verify_login_token(token)
-session_user_id = st.session_state.get("user_id")
-if user_info:
-    auth_state_changed = (
-        not st.session_state.get("logged_in")
-        or session_user_id != user_info["user_id"]
-        or st.session_state.get("username") != user_info["username"]
+if is_guest_mode():
+    cookie_token = None
+else:
+    cookie_token = read_cookie_value(cookie_manager, "auth_token")
+    token = select_auth_token(
+        cookie_token,
+        st.session_state.get("_auth_session_token"),
     )
-    if auth_state_changed:
-        set_authenticated_user(user_info)
-    st.session_state._auth_session_token = token
-    if auth_state_changed:
+    user_info = verify_login_token(token)
+    session_user_id = st.session_state.get("user_id")
+    if user_info:
+        auth_state_changed = (
+            not st.session_state.get("logged_in")
+            or session_user_id != user_info["user_id"]
+            or st.session_state.get("username") != user_info["username"]
+        )
+        if auth_state_changed:
+            set_authenticated_user(user_info)
+        st.session_state._auth_session_token = token
+        if auth_state_changed:
+            st.rerun()
+    elif st.session_state.get("logged_in") or session_user_id is not None:
+        clear_user_session_state()
+        if cookie_token:
+            cookie_manager.delete("auth_token")
         st.rerun()
-elif st.session_state.get("logged_in") or session_user_id is not None:
-    clear_user_session_state()
-    if cookie_token:
-        cookie_manager.delete("auth_token")
-    st.rerun()
 
 if not st.session_state.logged_in:
     # ─── 登录/注册页 ───
@@ -4627,6 +4807,14 @@ if not st.session_state.logged_in:
                     st.success("登录成功！")
                 else:
                     st.error("用户名或密码错误")
+
+        guest_col, guest_note_col = st.columns([1, 1])
+        with guest_col:
+            if st.button("游客登录 · 免注册", key="guest_login", use_container_width=True):
+                set_guest_user()
+                st.rerun()
+        with guest_note_col:
+            st.caption("可直接体验主要功能，关闭页面后不保留个性化记录")
 
     with tab_register:
         with st.form("register_form"):
@@ -4708,6 +4896,7 @@ if _wb_save and _uid:
 
 # ==================== 全局侧边栏导航 ====================
 _username = st.session_state.get('username', '?')
+_guest_mode = is_guest_mode()
 with st.sidebar:
     # 品牌区 — 渐变标题 (SVG icon)
     st.markdown("""
@@ -4718,6 +4907,9 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+
+    if _guest_mode:
+        st.info("游客模式：当前为临时体验，会话结束后不保留个性化记录。")
 
     # 导航分组 1: 核心功能
     st.markdown('<div class="sidebar-section-label">核心功能</div>', unsafe_allow_html=True)
@@ -4772,7 +4964,7 @@ with st.sidebar:
         <div class="sidebar-avatar">{_username[0]}</div>
         <div class="sidebar-user-info">
             <span class="sidebar-username">{_username}</span>
-            <span class="sidebar-subtitle">2026 届硕士</span>
+            <span class="sidebar-subtitle">{'临时体验模式' if _guest_mode else '2026 届硕士'}</span>
         </div>
     </div>
     <div class="sidebar-stats">
@@ -4781,12 +4973,14 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("退出登录", key="sidebar_logout", use_container_width=True):
-        revoke_login_session(
+    if st.button("退出游客模式" if _guest_mode else "退出登录", key="sidebar_logout", use_container_width=True):
+        _logout_token = (
             st.session_state.get("_auth_session_token")
             or read_cookie_value(cookie_manager, "auth_token")
         )
-        cookie_manager.delete("auth_token")
+        revoke_login_session(_logout_token)
+        if _logout_token:
+            cookie_manager.delete("auth_token")
         kb.clear_professional_session_state()
         clear_user_session_state()
         st.rerun()
@@ -5552,7 +5746,7 @@ if st.session_state.page == "main":
                     recall_pct = int(c['recall'] * 100)
                     with st.expander(f"第{i}题: {_clean_knowledge_name(c['knowledge_id'])[:35]} (记忆: {recall_pct}%)"):
                         knowledge_text = get_knowledge_text(c['knowledge_id'], corpus)
-                        st.markdown(knowledge_text[:1500])
+                        st.markdown(_safe_md_truncate(knowledge_text))
                         c1, c2, c3 = st.columns(3)
                         with c1:
                             if st.button("掌握", key=f"rev_m_{i}"):
@@ -6827,8 +7021,8 @@ if st.session_state.page == "english":
     </div>
     """, unsafe_allow_html=True)
 
-    tab_essay, tab_sentence, tab_translate, tab_vocab = st.tabs([
-        "作文批改", "长难句解析", "翻译与新题型", "单词记忆"
+    tab_essay, tab_sentence, tab_translate, tab_vocab, tab_writing = st.tabs([
+        "作文批改", "长难句解析", "翻译与新题型", "单词记忆", "写作培养"
     ])
 
     # ── 作文批改 ──
@@ -7056,15 +7250,7 @@ if st.session_state.page == "english":
 {edited_text}"""
             with st.spinner("批改中..."):
                 try:
-                    data = {"model": "mimo-v2.5", "messages": [
-                        {"role": "user", "content": prompt}
-                    ], "max_tokens": 3000, "temperature": 0.3}
-                    req = urllib.request.Request(API_BASE + "/chat/completions",
-                        data=json.dumps(data).encode("utf-8"),
-                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
-                        method="POST")
-                    with urllib.request.urlopen(req, timeout=120) as resp:
-                        result = _extract_content(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"])
+                    result = call_coding_plan(prompt, max_tokens=3000, temperature=0.3)
                     log_visit("英语作文批改", f"{exam_type} {part_type}: {essay_topic or edited_text[:30]}")
                     essay_q = f"{exam_type} {part_type} 作文"
                     if essay_topic:
@@ -7271,6 +7457,10 @@ if st.session_state.page == "english":
                 )
                 st.rerun()
 
+    # ── 写作培养：嵌入英语语感训练器原生工作区 ──
+    with tab_writing:
+        # 直接挂载 Git 项目的原生页面，保留其全部文字、模块和交互。
+        st.components.v1.iframe(build_writing_trainer_url(), height=1120, scrolling=True)
     st.stop()
 
 # ==================== 打卡与督学 ====================
@@ -8008,7 +8198,7 @@ with tab1:
         for r in results:
             kid = r['id']
             with st.expander(f"📄 {_clean_knowledge_name(kid)} ({r['score']})"):
-                st.markdown(r['text'][:1500])
+                st.markdown(_safe_md_truncate(r['text']))
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("🎲 出题", key=f"kb_s_{kid}", use_container_width=True):
@@ -8106,7 +8296,7 @@ with tab1:
         for doc in filtered_corpus:
             kid = doc['id']
             with st.expander(f"📄 {_clean_knowledge_name(kid)}"):
-                st.markdown(doc['text'][:1500])
+                st.markdown(_safe_md_truncate(doc['text']))
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("🎲 出题", key=f"kb_d_{kid}", use_container_width=True):
@@ -8208,7 +8398,7 @@ with tab2:
             recall_pct = int(c['recall'] * 100)
             with st.expander(f"第{i}题: {_clean_knowledge_name(c['knowledge_id'])[:35]} (记忆: {recall_pct}%)"):
                 knowledge_text = get_knowledge_text(c['knowledge_id'], corpus)
-                st.markdown(knowledge_text[:1500])
+                st.markdown(_safe_md_truncate(knowledge_text))
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     if st.button(f"掌握", key=f"rev_m_{i}"):
@@ -8391,5 +8581,4 @@ with tab3:
             st.markdown(f"<div class='mastered-card'>{name} | ✓{r[2]} ✗{r[3]}</div>", unsafe_allow_html=True)
         elif r[1] == "学习中":
             st.markdown(f"<div class='learning-card'>{name} | ✓{r[2]} ✗{r[3]}</div>", unsafe_allow_html=True)
-
 
